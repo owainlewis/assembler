@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute, harnessInput, runWorkflow, defaults, validateConfig } from "../src/index.js";
@@ -59,12 +59,13 @@ test("invalid harness configuration fails before execution", () => {
 test("CLI loads a TypeScript workflow from the selected project", async () => {
   const dir = await mkdtemp(join(tmpdir(), "assembler-cli-"));
   try {
-    await writeFile(join(dir, "workflow.ts"), `export default async function(ctx: any) { await ctx.step("Agent", () => ctx.agent(ctx.task)); }`);
+    await writeFile(join(dir, "workflow.ts"), `export default async function(ctx: any) { ctx.output("cwd", process.cwd()); await ctx.step("Agent", () => ctx.agent(ctx.task)); }`);
     await writeFile(join(dir, "assembler.json"), JSON.stringify({ agent: "fake", agents: { fake: { command: [process.execPath, "-e", "process.stdin.pipe(process.stdout)"], input: "stdin" } } }));
     const result = await execute([process.execPath, "--import", "tsx", join(import.meta.dirname, "../src/cli.ts"), "run", "workflow.ts", "--project", dir, "--prompt", "literal task", "--json"], process.cwd(), join(dir, "cli.log"), new AbortController().signal, 10_000);
     assert.equal(result.exitCode, 0, result.stderr);
     const report = JSON.parse(result.stdout);
     assert.equal(report.status, "completed");
+    assert.equal(report.outputs.find((output: any) => output.name === 'cwd').value, await realpath(dir));
     assert.match(await readFile(join(report.run, "1.log"), "utf8"), /literal task/);
   } finally { await rm(dir, { recursive: true }); }
 });
