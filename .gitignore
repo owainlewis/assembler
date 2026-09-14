@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .assembler/runs/
+.assembler/demos/
+.assembler/worker*

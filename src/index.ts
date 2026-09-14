@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, writeFileSync, renameSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { join } from "node:path";
@@ -17,7 +17,7 @@ export { z };
 export interface Result { exitCode: number; stdout: string; stderr: string; log: string; stdoutTruncated?: boolean; stderrTruncated?: boolean }
 export interface Row { id: string; parentId?: string; name: string; status: "running" | "passed" | "failed"; started: number; durationMs?: number; error?: string }
 export interface Output { id: string; stepId?: string; name: string; format: "text" | "json"; path: string; value: unknown }
-export interface RunRecord { schemaVersion: 1; id: string; status: string; agent: string; rows: Row[]; outputs: Output[]; error?: string }
+export interface RunRecord { schemaVersion: 1; id: string; status: string; agent: string; rows: Row[]; outputs: Output[]; error?: string; workflow?: string; createdAt?: string; cleanup?: string }
 export interface RunEvent { schemaVersion: 1; sequence: number; time: string; type: string; runId: string; data: unknown }
 export class RunError extends Error {
   constructor(message: string, public run: string, public record: RunRecord) { super(message); }
@@ -100,7 +100,9 @@ export async function execute(command: string[], cwd: string, log: string, signa
     const abort = () => stop("Cancelled");
     signal.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(() => stop("Command timed out"), timeoutMs);
-    const clean = () => { clearTimeout(timer); if (killer) clearTimeout(killer); signal.removeEventListener("abort", abort); };
+    // Do not cancel escalation when the direct child exits: descendants may
+    // have separate stdio and still be alive in the process group.
+    const clean = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); };
     const capture = (channel: string, data: Buffer) => {
       const text = data.toString();
       try { appendFileSync(log, `[${channel}] ${text}`, { mode: 0o600 }); }
@@ -127,21 +129,33 @@ export async function runWorkflow(workflow: Workflow, options: {
   task?: string; input?: unknown; project: string; config: Config; signal?: AbortSignal;
   update?: (rows: Row[]) => void;
   event?: (event: RunEvent) => void;
+  id?: string; workflowName?: string; createdAt?: string;
 }) {
   const config = validateConfig(options.config);
-  const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
+  const id = options.id ?? `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(id)) throw new Error('Invalid run ID');
   const directory = join(options.project, ".assembler", "runs", id);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const rows: Row[] = [];
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  let cancelled = false;
+  const abort = () => { cancelled = true; controller.abort(); };
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
+  const checkCancel = () => { if (existsSync(join(directory, 'cancel'))) abort(); };
+  checkCancel();
+  const cancelTimer = setInterval(checkCancel, 200);
+  const heartbeat = () => {
+    writeFileSync(join(directory, 'heartbeat.json.tmp'), JSON.stringify({ pid: process.pid, time: Date.now() }), { mode: 0o600 });
+    renameSync(join(directory, 'heartbeat.json.tmp'), join(directory, 'heartbeat.json'));
+  };
+  heartbeat();
+  const heartbeatTimer = setInterval(heartbeat, 1000);
   const signal = controller.signal;
   const storage = new AsyncLocalStorage<string>();
   const pending = new Set<Promise<unknown>>();
   let sequence = 0, eventSequence = 0, finished = false;
-  const record: RunRecord = { schemaVersion: 1, id, status: "running", agent: config.agent, rows, outputs: [] };
+  const record: RunRecord = { schemaVersion: 1, id, status: "running", agent: config.agent, rows, outputs: [], workflow: options.workflowName, createdAt: options.createdAt ?? new Date().toISOString() };
   const save = () => {
     writeFileSync(join(directory, "run.json.tmp"), JSON.stringify(record, null, 2), { mode: 0o600 });
     renameSync(join(directory, "run.json.tmp"), join(directory, "run.json"));
@@ -158,6 +172,7 @@ export async function runWorkflow(workflow: Workflow, options: {
     if (!harness) throw new Error("Unknown agent selection");
     if (harness.provider === "codex" || harness.provider === "claude") {
       const log = join(directory, `${++sequence}.agent.jsonl`);
+      emit('agent.started', { stepId: storage.getStore(), provider: harness.provider, log });
       const timer = AbortSignal.timeout(settings.timeoutMs ?? config.timeoutMs);
       const result = await runSDK(harness.provider, { prompt, cwd: project, model: harness.model, executable: harness.executable,
         readOnly: settings.readOnly, readCommands: settings.readCommands, schema: settings.schema ? z.toJSONSchema(settings.schema, { target: "draft-7" }) : undefined,
@@ -253,17 +268,19 @@ export async function runWorkflow(workflow: Workflow, options: {
   const context = makeContext(options.project);
   try {
     save(); emit("run.started", { agent: config.agent });
+    if (signal.aborted) throw new Error('Cancelled before execution');
     await workflow(context);
     if (pending.size) throw new Error("Workflow returned with unfinished steps; await all steps");
     if (signal.aborted) throw new Error("Cancelled");
     record.status = "completed";
   } catch (error) {
-    record.status = options.signal?.aborted ? "cancelled" : "failed";
+    record.status = cancelled ? "cancelled" : "failed";
     record.error = error instanceof Error ? error.message : String(error);
     controller.abort();
     await Promise.allSettled([...pending]);
   } finally {
     finished = true; options.signal?.removeEventListener("abort", abort);
+    clearInterval(cancelTimer); clearInterval(heartbeatTimer);
     save(); emit("run.finished", record);
   }
   if (record.status !== "completed") throw new RunError(record.error ?? "Run failed", directory, record);
