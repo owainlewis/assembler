@@ -33,7 +33,11 @@ try {
 } catch (error) {
   if (!(error instanceof RunError)) {
     const record = await readRun(project, id);
-    await atomicJSON(join(dir, 'run.json'), { ...record, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    const cancelled = controller.signal.aborted || await exists(join(dir, 'cancel'));
+    await atomicJSON(join(dir, 'run.json'), { ...record, status: disconnected ? 'interrupted' : cancelled ? 'cancelled' : 'failed',
+      error: disconnected ? 'Worker connection lost during loading; no automatic retry. ' + message : message,
+      ...(cancelled ? { cleanup: 'Unknown: module initialization may have created resources. Inspect before rerunning.' } : {}) });
   }
 } finally {
   executionFinished = true;

@@ -10,6 +10,30 @@ import { enqueue, startWorker } from '../src/queue.js';
 
 const linux = process.platform === 'linux';
 
+for (const reason of ['disconnect', 'cancel'] as const) test(reason + ' during a failing module import retains the lifecycle outcome', { skip: !linux, timeout: 30_000 }, async () => {
+  const project = await mkdtemp(join(tmpdir(), 'assembler-import-disconnect-'));
+  try {
+    await writeFile(join(project, 'package.json'), '{"type":"module"}');
+    await writeFile(join(project, 'flow.ts'), `import { writeFileSync } from 'node:fs';
+      writeFileSync(new URL('./loading', import.meta.url), '');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      throw new Error('module initialization failed');
+      export default async () => {};`);
+    const job = await enqueue(project, 'flow.ts', {}, '', defaults);
+    await startWorker(project);
+    await until(async () => { try { await access(join(runDirectory(project, job.id), 'source', 'loading')); return true; } catch { return false; } });
+    const worker = await readJSON<{ pid: number }>(join(project, '.assembler', 'worker.json'));
+    if (reason === 'disconnect') process.kill(worker.pid, 'SIGKILL');
+    else await cancelRun(project, job.id);
+    const result = await until(async () => { const r = await readRun(project, job.id); return terminal(r.status) && r; });
+    assert.equal(result.status, reason === 'disconnect' ? 'interrupted' : 'cancelled');
+    assert.match(result.error!, /module initialization failed/);
+    if (reason === 'disconnect') assert.match(result.error!, /Worker connection lost/);
+    assert.match(result.cleanup!, /Unknown/);
+    if (reason === 'disconnect') await startWorker(project);
+  } finally { await stop(project); await rm(project, { recursive: true, force: true }); }
+});
+
 test('late disconnect cannot overwrite completed, failed or cancelled outcomes', async () => {
   const project = await mkdtemp(join(tmpdir(), 'assembler-late-disconnect-'));
   try {
