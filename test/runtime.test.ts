@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute, harnessInput, runWorkflow, defaults, validateConfig } from "../src/index.js";
-import build from "../src/build.js";
+import fixChecks from "../src/fix-checks.js";
 
 test("prompts remain literal arguments, including shell syntax", async () => {
   const prompt = '`touch bad` $(echo bad) "quotes"\nline';
@@ -40,14 +40,15 @@ test("run records failures and step outcomes", async () => {
   } finally { await rm(dir, { recursive: true }); }
 });
 
-test("build repairs failures and verifies the last repair", async () => {
+test("fix-checks repairs failures and verifies the last repair", async () => {
   let agents = 0, checks = 0;
-  await build({ task: "fix", project: ".", config: { ...defaults, checks: [["test"]], maxRepairs: 1 }, signal: new AbortController().signal,
+  await fixChecks({ task: "fix", input: { checks: [["test"]], maxRepairs: 1 }, project: ".", config: defaults, signal: new AbortController().signal,
+    output: () => ({}),
     step: async (_, action) => action(),
     agent: async () => { agents++; return { exitCode: 0, stdout: "", stderr: "", log: "" }; },
     exec: async () => ({ exitCode: checks++ === 0 ? 1 : 0, stdout: "", stderr: "", log: "" }),
   });
-  assert.equal(agents, 3); assert.equal(checks, 2);
+  assert.equal(agents, 1); assert.equal(checks, 2);
 });
 
 test("invalid harness configuration fails before execution", () => {
@@ -76,8 +77,8 @@ test("cancellation stops an active process", async () => {
   finally { clearTimeout(timer); await rm(dir, { recursive: true }); }
 });
 
-test("build cannot report success when its repair budget is exhausted", async () => {
-  await assert.rejects(build({ task: "fix", project: ".", config: { ...defaults, checks: [["test"]], maxRepairs: 0 }, signal: new AbortController().signal,
+test("fix-checks cannot report success when its repair budget is exhausted", async () => {
+  await assert.rejects(fixChecks({ task: "fix", input: { checks: [["test"]], maxRepairs: 0 }, project: ".", config: defaults, signal: new AbortController().signal,
     step: async (_, action) => action(),
     agent: async () => ({ exitCode: 0, stdout: "", stderr: "", log: "" }),
     exec: async () => ({ exitCode: 1, stdout: "bad", stderr: "", log: "" }),

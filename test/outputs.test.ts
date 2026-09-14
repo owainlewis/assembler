@@ -99,7 +99,7 @@ test("NDJSON is a complete ordered lifecycle on failure", () => fixture(async pr
 }));
 
 test("CLI errors before a run still return valid JSON", () => fixture(async project => {
-  const result = await execute([process.execPath, "--import", "tsx", join(import.meta.dirname, "../src/cli.ts"), "run", "--project", project, "--json"], process.cwd(), join(project, "cli.log"), new AbortController().signal, 10_000);
+  const result = await execute([process.execPath, "--import", "tsx", join(import.meta.dirname, "../src/cli.ts"), "run", "--project", project, "--input", "[]", "--json"], process.cwd(), join(project, "cli.log"), new AbortController().signal, 10_000);
   assert.equal(result.exitCode, 1);
   assert.equal(JSON.parse(result.stdout).run, null);
   assert.equal(JSON.parse(result.stdout).status, "failed");

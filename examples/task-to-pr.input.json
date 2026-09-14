@@ -1,0 +1,8 @@
+{
+  "ticket": "https://github.com/owner/repository/issues/123",
+  "prompt": "Build this task. Prefer the simplest solution consistent with the repository conventions. Add regression tests for the acceptance criteria.",
+  "setup": [["npm", "ci"]],
+  "checks": [["npm", "test"], ["npm", "run", "check"]],
+  "localRepairs": 3,
+  "feedbackRepairs": 3
+}

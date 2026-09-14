@@ -4,13 +4,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { runSDK, type AgentResult } from "./agents.js";
+export type { AgentResult } from "./agents.js";
 
-export interface Harness { command: string[]; input?: "stdin" | "argument"; structured?: "codex" | "claude" | "prompt" }
+export interface Harness { provider?: "codex" | "claude" | "command"; model?: string; executable?: string; command?: string[]; input?: "stdin" | "argument"; structured?: "codex" | "claude" | "prompt" }
 export interface Config {
   agent: string;
   agents: Record<string, Harness>;
-  checks: string[][];
-  maxRepairs: number;
   timeoutMs: number;
 }
 export { z };
@@ -22,42 +22,66 @@ export interface RunEvent { schemaVersion: 1; sequence: number; time: string; ty
 export class RunError extends Error {
   constructor(message: string, public run: string, public record: RunRecord) { super(message); }
 }
-export interface Context {
+export interface AgentOptions<S extends z.ZodType = z.ZodType> { prompt: string; schema?: S; agent?: string; readOnly?: boolean; readCommands?: string[]; timeoutMs?: number }
+export interface AgentCall {
+  (prompt: string): Promise<Result>;
+  (name: string, options: AgentOptions & { schema?: undefined }): Promise<AgentResult>;
+  <S extends z.ZodType>(name: string, options: AgentOptions<S> & { schema: S }): Promise<AgentResult & { data: z.output<S> }>;
+}
+export interface Context<I = unknown> {
   task: string; project: string; config: Config; signal: AbortSignal;
+  input: I;
+  at(project: string): Context<I>;
   step<T>(name: string, action: () => Promise<T>): Promise<T>;
   exec(command: string[], options?: { input?: string; allowFailure?: boolean }): Promise<Result>;
-  agent(prompt: string): Promise<Result>;
+  agent: AgentCall;
   agentJson<S extends z.ZodType>(prompt: string, schema: S): Promise<z.output<S>>;
   output(name: string, value: unknown): Output;
 }
-export type Workflow = (context: Context) => Promise<void>;
-export const defineWorkflow = (workflow: Workflow): Workflow => workflow;
+export type Workflow = (context: Context<any>) => Promise<void>;
+export function defineWorkflow(workflow: Workflow): Workflow;
+export function defineWorkflow<S extends z.ZodType>(definition: { input: S; run: (context: Context<z.output<S>>) => Promise<void> }): Workflow;
+export function defineWorkflow(definition: Workflow | { input: z.ZodType; run: Workflow }): Workflow {
+  if (typeof definition === "function") return definition;
+  return async ctx => {
+    const input = definition.input.parse(ctx.input);
+    const scoped = (context: Context): Context => ({ ...context, input, at: project => scoped(context.at(project)) });
+    await definition.run(scoped(ctx));
+  };
+}
 
 export const defaults: Config = {
   agent: "codex",
   agents: {
-    codex: { command: ["codex", "exec", "--sandbox", "workspace-write", "-"], input: "stdin", structured: "codex" },
-    claude: { command: ["claude", "-p", "{prompt}"], input: "argument", structured: "claude" },
+    codex: { provider: "codex" },
+    claude: { provider: "claude" },
   },
-  checks: [], maxRepairs: 3, timeoutMs: 30 * 60_000,
+  timeoutMs: 30 * 60_000,
 };
 
 export function validateConfig(value: Config): Config {
   const command = (v: unknown): v is string[] => Array.isArray(v) && v.length > 0 && v.every(x => typeof x === "string") && v[0].length > 0;
   if (!value || typeof value.agent !== "string" || !value.agents || !value.agents[value.agent]) throw new Error("Select a configured agent");
   for (const [name, h] of Object.entries(value.agents)) {
+    if (h?.provider === "codex" || h?.provider === "claude") {
+      if (h.command) throw new Error(`${name}: use provider command for a custom command`);
+      if (h.input || h.structured) throw new Error(`${name}: input/structured are command adapter options`);
+      if ([h.model, h.executable].some(value => value !== undefined && (typeof value !== "string" || !value.trim()))) throw new Error(`${name}: model/executable must be nonempty strings`);
+      continue;
+    }
+    if (h?.provider && h.provider !== "command") throw new Error(`Unknown provider: ${name}`);
     if (!h || !command(h.command) || (h.input !== undefined && !["stdin", "argument"].includes(h.input))) throw new Error(`Invalid harness: ${name}`);
     if (h.input === "argument" && !h.command.slice(1).some(x => x.includes("{prompt}"))) throw new Error(`${name}: argument input requires {prompt}`);
     if (h.command[0].includes("{prompt}")) throw new Error("Prompt cannot be an executable");
     if (h.structured && !["codex", "claude", "prompt"].includes(h.structured)) throw new Error(`Invalid structured output adapter: ${name}`);
   }
-  if (!Array.isArray(value.checks) || !value.checks.every(command)) throw new Error("checks must be arrays of executable and arguments");
-  if (!Number.isInteger(value.maxRepairs) || value.maxRepairs < 0 || value.maxRepairs > 20) throw new Error("maxRepairs must be 0..20");
+  if ("checks" in value || "maxRepairs" in value) throw new Error("Move checks/maxRepairs from runtime config into workflow inputs");
   if (!Number.isSafeInteger(value.timeoutMs) || value.timeoutMs <= 0) throw new Error("timeoutMs must be positive");
   return value;
 }
 
 export function harnessInput(harness: Harness, prompt: string) {
+  if (!harness.command) throw new Error("Command harness requires command");
   return harness.input === "argument"
     ? { command: harness.command.map((arg, i) => i ? arg.replaceAll("{prompt}", () => prompt) : arg), input: undefined }
     : { command: harness.command, input: prompt };
@@ -100,7 +124,7 @@ export async function execute(command: string[], cwd: string, log: string, signa
 }
 
 export async function runWorkflow(workflow: Workflow, options: {
-  task: string; project: string; config: Config; signal?: AbortSignal;
+  task?: string; input?: unknown; project: string; config: Config; signal?: AbortSignal;
   update?: (rows: Row[]) => void;
   event?: (event: RunEvent) => void;
 }) {
@@ -127,8 +151,39 @@ export async function runWorkflow(workflow: Workflow, options: {
     appendFileSync(join(directory, "events.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 });
     options.event?.(event);
   };
+  const makeContext = (project: string): Context => {
+  const callAgent = async (prompt: string, settings: AgentOptions = { prompt }): Promise<AgentResult> => {
+    if (settings.readCommands && (!settings.readOnly || !settings.readCommands.length || settings.readCommands.some(command => typeof command !== "string" || !command.trim()))) throw new Error("readCommands requires readOnly and nonempty trusted commands");
+    const harness = config.agents[settings.agent ?? config.agent];
+    if (!harness) throw new Error("Unknown agent selection");
+    if (harness.provider === "codex" || harness.provider === "claude") {
+      const log = join(directory, `${++sequence}.agent.jsonl`);
+      const timer = AbortSignal.timeout(settings.timeoutMs ?? config.timeoutMs);
+      const result = await runSDK(harness.provider, { prompt, cwd: project, model: harness.model, executable: harness.executable,
+        readOnly: settings.readOnly, readCommands: settings.readCommands, schema: settings.schema ? z.toJSONSchema(settings.schema, { target: "draft-7" }) : undefined,
+        signal: AbortSignal.any([signal, timer]), event: event => appendFileSync(log, JSON.stringify(event) + "\n", { mode: 0o600 }) });
+      emit("agent.finished", { stepId: storage.getStore(), provider: harness.provider, sessionId: result.sessionId, usage: result.usage, commands: result.commands, log });
+      return { ...result, data: settings.schema ? settings.schema.parse(result.data) : undefined };
+    }
+    if (settings.readOnly) throw new Error("Command harness cannot enforce read-only mode; configure an SDK agent for review");
+    if (settings.agent && settings.agent !== config.agent) throw new Error("Per-step command override is not supported");
+    if (settings.schema) return { text: "", data: await context.agentJson(prompt, settings.schema) };
+    const prepared = harnessInput(harness, prompt);
+    const result = await context.exec(prepared.command, { input: prepared.input });
+    return { text: result.stdout };
+  };
+  const agent = ((name: string, settings?: AgentOptions) => {
+    if (settings) return context.step(name, () => callAgent(settings.prompt, settings));
+    const harness = config.agents[config.agent];
+    if (harness.provider !== "codex" && harness.provider !== "claude") {
+      const prepared = harnessInput(harness, name);
+      return context.exec(prepared.command, { input: prepared.input });
+    }
+    return callAgent(name).then(result => ({ exitCode: 0, stdout: result.text, stderr: "", log: directory }));
+  }) as AgentCall;
   const context: Context = {
-    task: options.task, project: options.project, config, signal,
+    task: options.task ?? "", input: options.input ?? {}, project, config, signal, agent,
+    at: makeContext,
     step(name, action) {
       if (finished) throw new Error("Run already finished");
       if (signal.aborted) throw new Error("Cancelled");
@@ -147,14 +202,14 @@ export async function runWorkflow(workflow: Workflow, options: {
       if (finished) throw new Error("Run already finished");
       const log = join(directory, `${++sequence}.log`);
       emit("command.started", { stepId: storage.getStore(), executable: command[0], log });
-      const result = await execute(command, options.project, log, signal, config.timeoutMs, args.input);
+      const result = await execute(command, project, log, signal, config.timeoutMs, args.input);
       emit("command.finished", { stepId: storage.getStore(), exitCode: result.exitCode, log });
       if (result.exitCode !== 0 && !args.allowFailure) throw new Error(`Command failed (${result.exitCode}): ${command[0]}. Log: ${result.log}`);
       return result;
     },
-    async agent(prompt) { const input = harnessInput(config.agents[config.agent], prompt); return context.exec(input.command, { input: input.input }); },
     async agentJson(prompt, schema) {
       const harness = config.agents[config.agent];
+      if (harness.provider === "codex" || harness.provider === "claude") return (await callAgent(prompt, { prompt, schema })).data as z.output<typeof schema>;
       const schemaText = JSON.stringify(z.toJSONSchema(schema, { target: "draft-7" }));
       const prepared = harnessInput(harness, `${prompt}\n\nReturn ONLY a JSON value matching this schema. No markdown fences or commentary.\n${schemaText}`);
       const command = [...prepared.command];
@@ -193,6 +248,9 @@ export async function runWorkflow(workflow: Workflow, options: {
       return output;
     },
   };
+  return context;
+  };
+  const context = makeContext(options.project);
   try {
     save(); emit("run.started", { agent: config.agent });
     await workflow(context);

@@ -6,33 +6,43 @@ import { tsImport } from "tsx/esm/api";
 import { defaults, runWorkflow, RunError, type Config, type RunRecord } from "./index.js";
 import { progress, formatOutputs, plain } from "./display.js";
 import build from "./build.js";
+import fixChecks from "./fix-checks.js";
+import reviewPR from "./review-pr.js";
+import fetchTask from "./fetch-task.js";
 
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     task: { type: "string" }, prompt: { type: "string" }, project: { type: "string", default: "." },
     agent: { type: "string" }, json: { type: "boolean" }, events: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    input: { type: "string" }, "input-file": { type: "string" }, ticket: { type: "string" },
   } });
   if (values.json && values.events) throw new Error("Choose --json or --events");
-  const [command, name = "build"] = positionals;
+  const [command, requestedName = "build"] = positionals;
+  const name = command === "build" ? "build" : requestedName;
   if (values.help || !command) {
-    console.log("Assembler · coding workflows as code\n\nassembler init [--project .]\nassembler run [build|workflow.ts] --task task.md [--agent codex]\nassembler run build --prompt 'Fix the parser' [--json | --events]\n\n--json: one final result, including failures and named outputs\n--events: versioned NDJSON events while the run proceeds\nLocal workflows: .assembler/workflows/<name>.ts\nConfig: assembler.json · Node 22+ · Ctrl+C cancels child processes");
+    console.log("Assembler · coding workflows as code\n\nassembler init [--project .]\nassembler build --ticket ENG-123 --input-file delivery.json\nassembler run fix-checks --input '{\"checks\":[[\"npm\",\"test\"]]}'\nassembler run review-pr --input '{\"pr\":123}'\nassembler run workflow.ts --input-file inputs.json [--agent codex]\n\n--prompt: workflow-specific instructions\n--json: final record; --events: NDJSON progress\nConfig: assembler.json (agents/runtime); workflow inputs own all delivery policy.");
     return;
   }
   const project = await realpath(resolve(values.project!));
   if (command === "init") {
     await writeFile(join(project, "assembler.json"), JSON.stringify(defaults, null, 2) + "\n", { flag: "wx" });
     await mkdir(join(project, ".assembler", "workflows"), { recursive: true });
-    console.log("Created assembler.json. Add validation commands to checks, then run a task.");
+    console.log("Created assembler.json. Supply workflow inputs with --input or --input-file.");
     return;
   }
-  if (command !== "run") throw new Error(`Unknown command: ${command}`);
-  if (!!values.task === !!values.prompt) throw new Error("Supply exactly one of --task FILE or --prompt TEXT");
-  const task = values.task ? await readFile(resolve(project, values.task), "utf8") : values.prompt!;
-  if (!task.trim()) throw new Error("Task cannot be empty");
-  let custom: Partial<Config> = {};
+  if (command !== "run" && command !== "build") throw new Error(`Unknown command: ${command}`);
+  if (values.input && values["input-file"]) throw new Error("Choose --input or --input-file");
+  let input: Record<string, unknown> = values.input ? JSON.parse(values.input) : values["input-file"] ? JSON.parse(await readFile(resolve(project, values["input-file"]), "utf8")) : {};
+  if (!input || Array.isArray(input) || typeof input !== "object") throw new Error("Workflow input must be an object");
+  // A project's optional workflow defaults belong to that workflow, not Config.
+  let custom: Partial<Config> & { workflows?: Record<string, Record<string, unknown>> } = {};
   try { custom = JSON.parse(await readFile(join(project, "assembler.json"), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const config: Config = { ...defaults, ...custom, agents: { ...defaults.agents, ...custom.agents }, agent: values.agent ?? custom.agent ?? defaults.agent };
+  input = { ...custom.workflows?.[name], ...input, ...(values.prompt ? { prompt: values.prompt } : {}), ...(values.ticket ? { ticket: values.ticket } : {}) };
+  if (command === "build" && values.task) input.ticket = values.task;
+  const task = command === "build" ? String(input.ticket ?? "") : values.task ? await readFile(resolve(project, values.task), "utf8") : values.prompt ?? "";
+  const { workflows, ...runtime } = custom;
+  const config: Config = { ...defaults, ...runtime, agents: { ...defaults.agents, ...runtime.agents }, agent: values.agent ?? runtime.agent ?? defaults.agent };
   const machine = values.json || values.events;
   const ui = progress(!machine);
   // Keep accidental workflow console messages out of the stdout protocol.
@@ -43,13 +53,14 @@ async function main() {
   process.on("SIGINT", cancel); process.on("SIGTERM", cancel);
   let run: string | undefined, record: RunRecord | undefined;
   try {
-    const loaded = name === "build" ? build : (await tsImport(
+    const builtins: Record<string, unknown> = { build, "task-to-pr": build, "fetch-task": fetchTask, "fix-checks": fixChecks, "review-pr": reviewPR };
+    const loaded = builtins[name] ?? (await tsImport(
       name.endsWith(".ts") || name.endsWith(".js") ? resolve(project, name) : join(project, ".assembler", "workflows", `${name}.ts`), import.meta.url)).default;
     const workflow = typeof loaded === "function" ? loaded : loaded?.default;
     if (typeof workflow !== "function") throw new Error("Workflow must default-export a function");
-    if (!machine) process.stderr.write(`\nassembler · ${plain(name)} · ${plain(values.task ?? "task")}\n\n`);
+    if (!machine) process.stderr.write(`\nassembler · ${plain(name)} · ${plain(String(input.ticket ?? values.task ?? "task"))}\n\n`);
     try {
-      run = await runWorkflow(workflow, { task, project, config, signal: controller.signal,
+      run = await runWorkflow(workflow, { task, input, project, config, signal: controller.signal,
         update: ui.update, event: values.events ? event => process.stdout.write(JSON.stringify(event) + "\n") : undefined });
       record = JSON.parse(await readFile(join(run, "run.json"), "utf8"));
     } catch (error) {

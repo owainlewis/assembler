@@ -1,69 +1,80 @@
-# Output and execution contracts
+# Execution contracts
 
-The workflow, provider, and terminal have distinct contracts. They should not share
-one stream of text with different consumers guessing what each line means.
+The runtime supplies execution, progress and artifacts. Workflows supply engineering
+policy. Provider adapters supply coding-agent integration.
 
-| Surface | Purpose | Contract |
-| --- | --- | --- |
-| `ctx.exec` / `ctx.agent` | Process output | Exit code, raw stdout/stderr tails, truncation flags, log path |
-| `ctx.agentJson` | Decisions and data between steps | Native provider schema request where available, plus local Zod validation |
-| `ctx.output` | Results for people and downstream jobs | Named text/JSON artifact, saved before display |
-| `run.json` / `--json` | Final machine result | Versioned record; same shape on execution success/failure |
-| `events.jsonl` / `--events` | Progress consumers | Ordered versioned events with unique step IDs |
+| Surface | Contract |
+| --- | --- |
+| `defineWorkflow({ input, run })` | Validate workflow-owned Zod input before running |
+| `ctx.exec(argv)` | Exit code, bounded stdout/stderr tails, full log path |
+| `ctx.agent(name, options)` | Named step; text, validated data, provider session/usage |
+| `ctx.output(name, value)` | Persist named text/JSON before display |
+| `run.json` / `--json` | Versioned final status, step rows and outputs, including failures |
+| `events.jsonl` / `--events` | Ordered versioned events and unique step IDs |
 
-## Agent integration
+## Providers
 
-Keep the generic command harness. Add capabilities rather than pretending all
-commands offer final-answer extraction, structured output, usage, or sessions.
-Codex and Claude have small native structured-output adapters today. Their CLI
-processes supply execution, authentication, permissions and cancellation behavior.
-The official SDKs are a possible implementation behind the same workflow API when
-we need typed tool events, sessions, or usage. They are not required just to obtain
-JSON. Do not fall back silently from a failed native call to another provider or
-another agent invocation: that could repeat edits and spend unexpectedly.
+Official SDK events stay in private per-call logs. Normalized `agent.finished`
+events expose session IDs and reported input, cached-input and output tokens.
+Cached input is a subset of normalized input; do not add it again. Generic command
+adapters do not fabricate metrics.
 
-Schema correctness is not factual correctness. A schema-valid approval is still
-an agent judgment. Validation commands and acceptance criteria remain workflow
-responsibilities. Conversion to JSON Schema can reject unsupported Zod types
-before invoking a provider; transformations are not a portable provider contract.
+Schemas go to providers as JSON Schema and are validated locally with Zod.
+Schema correctness is not factual correctness. Unsupported schema conversions,
+provider failures and invalid responses fail the step. No silent fallback or
+Assembler retry; provider-internal retries may still occur.
 
-## Progress and output
+The explicit command adapter does not claim read-only enforcement, session
+recovery or arbitrary tool-chatter parsing. SDK read-only behavior differs:
+Codex uses its sandbox; Claude restricts tools. Settings/hooks and workflows
+must still be trusted.
 
-The terminal displays named steps, not provider token streams. Progress uses stderr;
-named outputs are rendered after the display stops, on success or failure. Non-TTY
-logs print each actual state transition once, including out-of-order completion.
-The TTY renderer handles wrapping and redraws. Console chatter clears and redraws
-the display. Outputs are sanitized for terminal control sequences, but their files
-retain original content. Long outputs are previewed; JSON retains complete values.
+Ticket fetching is an agent step using CLI commands, not a tracker API adapter.
+`readCommands` explicitly enables networked CLI reads. Claude permits only those
+exact Bash commands through a pre-tool hook and disables inherited MCP servers;
+Codex uses a read-only filesystem profile with network enabled. Its sandbox does
+not constrain remote API methods, so CLI credentials should be read-scoped.
+Review steps do not enable this capability. The workflow validates the returned
+identity/state/completeness and requires successful commands in SDK tool events,
+then saves a task snapshot shared by implementation and review. Extraction remains
+agent judgment. Missing tools/authentication fail closed; no alternate transport.
 
-Parallel steps get distinct IDs even when names match. Async-local context associates
-outputs/commands with their enclosing step. Outputs are ordered by publication,
-not by step-start order. A nested step records its parent ID. Await all steps;
-unawaited work is an error, not a resumability mechanism.
+## Workflow policy
 
-## Failures and cancellation
+The config's `workflows` map holds opaque defaults merged with CLI inputs.
+The selected workflow owns their schema. Checks, repairs, ticket sources,
+branches and review quiet windows are not runtime options.
 
-Process errors, nonzero exits, timeouts, parsing failures and schema failures fail
-the step. Workflow code may explicitly catch a failure and repair it. The build
-workflow can therefore finish successfully with earlier failed-check rows visible.
-On terminal failure the runtime cancels subprocesses and waits for tracked steps
-before writing the final record. Custom code must observe the abort signal.
-Interrupted processes cannot be assumed to have made no changes.
+Build uses a local ticket claim, stable worktree/branch, local gates and bounded
+remote repairs. It records readiness for an exact head, never merges and does
+not override required GitHub approvals. Continuation checks branch/head state.
+A quiet window cannot guarantee that no future review will arrive.
 
-Run manifests use atomic replacement, but this is not a durable execution engine.
-There is no replay, stale-run reconciliation after SIGKILL, or cross-process lock.
-Workflow code can bypass the API, write stdout, hang, or create untracked processes.
-There is no whole-workflow deadline yet, only command timeouts. Production factory
-invocations should retain an outer supervisor deadline and isolate editing jobs.
+Fix-checks demonstrates deterministic checks around agent repairs without GitHub
+policy. Review-pr demonstrates a fresh verification pass without publishing
+findings. All are ordinary exported TypeScript workflows.
 
-## Example coverage
+## Display and concurrency
 
-- `outputs.ts`: text → schema-backed plan → text review, three published outputs.
-- `structured.ts`: validated classification controls the next code branch.
-- `parallel.ts`: three command steps finish out of order without provider credentials.
-- `failure.ts`: a saved result survives a later nonzero exit.
+Progress uses stderr; published outputs display after the renderer stops,
+including on failure. Long values get previews/artifact paths. Display strips
+control sequences; files preserve originals. Machine outputs contain full values.
 
-Remaining design work should be driven by actual workflows: per-step agent/model
-selection, explicit approval artifacts, usage capabilities, maximum output/log sizes,
-and resume semantics. The present contract deliberately exposes neither fabricated
-token totals nor a promise that a successful process means the task is correct.
+Steps have unique IDs, nested parent IDs and async-local command/output attribution.
+Parallel completion may be out of order; outputs remain in publication order.
+`ctx.at` scopes execution without a second run. Await steps and isolate editors.
+
+## Failure and recovery
+
+A failed check remains a failed row even if explicit repair later succeeds.
+Terminal failure cancels tracked work before the final record. Commands terminate
+subprocess groups on supported platforms; SDK calls receive abort signals.
+Custom async code must honor cancellation.
+
+Run manifests and feedback state use atomic replacement, not durable replay.
+Build locks are local to a shared Git directory. SIGKILL can leave stale locks.
+There is no whole-workflow deadline; scheduling should supply one externally.
+
+Future work should follow delivery evidence: crash recovery, distributed claims,
+reviewer-specific completion signals, bounded log retention and comparable task
+metrics. A successful SDK call is never proof of task correctness.
