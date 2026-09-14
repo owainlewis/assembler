@@ -14,7 +14,8 @@ assembler · build · tasks/auth-refresh.md
 
 Assembler runs a procedure. Your coding agent does the reasoning. Use the built-in
 build workflow or write an ordinary TypeScript function with named steps, command
-execution, and agent calls. No provider SDK or agent-output parser required.
+execution, and agent calls. Text steps use ordinary commands; structured steps use
+native Codex/Claude JSON contracts with local schema validation.
 
 ## Install
 
@@ -41,7 +42,9 @@ assembler run build --task tasks/auth-refresh.md --agent claude
 
 `--project` defaults to the current directory. Task paths and workflow paths are
 resolved relative to that project. Use `--json` for a machine-readable success
-result. Failures go to stderr and return exit code 1.
+result including named outputs and failures. Use `--events` for versioned NDJSON
+progress events. These flags are mutually exclusive. Failed runs return exit code 1;
+cancelled runs return 130. Human progress goes to stderr and outputs to stdout.
 
 ## Harnesses are commands
 
@@ -52,8 +55,8 @@ Add explicit validation commands before using the built-in build workflow:
 {
   "agent": "codex",
   "agents": {
-    "codex": { "command": ["codex", "exec", "--sandbox", "workspace-write", "-"], "input": "stdin" },
-    "claude": { "command": ["claude", "-p", "{prompt}"], "input": "argument" }
+    "codex": { "command": ["codex", "exec", "--sandbox", "workspace-write", "-"], "input": "stdin", "structured": "codex" },
+    "claude": { "command": ["claude", "-p", "{prompt}"], "input": "argument", "structured": "claude" }
   },
   "checks": [["npm", "test"], ["npm", "run", "lint"]],
   "maxRepairs": 3,
@@ -86,9 +89,10 @@ export default async function audit(ctx) {
     ctx.exec(["git", "diff"]),
   );
 
-  await ctx.step("Review", () =>
+  const review = await ctx.step("Review", () =>
     ctx.agent(`Review these changes. Do not edit files.\n${diff.stdout}`),
   );
+  ctx.output("Review", review.stdout);
 
   await ctx.step("Tests", () => ctx.exec(["npm", "test"]));
 }
@@ -111,13 +115,62 @@ export default defineWorkflow(async ctx => {
 ```
 
 The context exposes `task`, `project`, `config`, `signal`, `step`, `exec`, and
-`agent`. Commands return `{ exitCode, stdout, stderr, log }`. Nonzero exits throw
+`agent`, `agentJson`, and `output`. Commands return `{ exitCode, stdout, stderr, log,
+stdoutTruncated, stderrTruncated }`. Nonzero exits throw
 unless `allowFailure: true` is supplied. Output returned in memory is limited to
 the last 64,000 characters per stream; complete output is saved to disk.
 
 Workflows are trusted local programs with your account's permissions. They can
 import libraries, call APIs, branch, and loop. Keep external task content as data.
-Named steps run as you call them; sequential steps provide the clearest v1 UI.
+Named steps run as you call them. Parallel steps work with `Promise.all`; each has
+a unique ID, and outputs inside a step retain its ID even when steps finish out of
+order. Await every step. Concurrent editing still requires workflow-level isolation.
+
+## Outputs and structured decisions
+
+```ts
+import { defineWorkflow, z } from "@owainlewis/assembler";
+
+export default defineWorkflow(async ctx => {
+  const decision = await ctx.step("Classify", () => ctx.agentJson(
+    `Classify this task: ${ctx.task}`,
+    z.object({ kind: z.enum(["bug", "feature"]), reason: z.string() }),
+  ));
+  ctx.output("Classification", decision);
+  if (decision.kind === "bug") {
+    // Run your bug-specific workflow steps here.
+  }
+});
+```
+
+`ctx.output(name, value)` saves text or JSON immediately. The terminal displays
+outputs below the finished progress display, including on failure. Long outputs
+get a preview and a path to the full artifact. JSON results include all named
+outputs. Use this instead of `console.log` for workflow results; ordinary console
+messages are redirected to stderr so they do not corrupt the JSON protocol.
+Direct writes to `process.stdout` from trusted workflow code can still break it.
+
+`agentJson` uses Codex `--output-schema` plus `--output-last-message`, or Claude
+`--json-schema --output-format json`. Schemas are draft-7 for compatibility.
+Assembler validates the final value locally with Zod. Custom harnesses without a
+`structured` adapter receive a JSON-only prompt and must emit valid JSON on stdout.
+Malformed, truncated, fenced, or schema-invalid output fails the step; there are no
+hidden Assembler retry calls. Provider-internal structured-output retries may occur.
+Do not configure conflicting JSON output flags in the base harness command.
+
+Try the checked-in workflows:
+
+```sh
+node dist/cli.js run examples/outputs.ts --prompt "Add a health endpoint" --agent codex
+node dist/cli.js run examples/outputs.ts --prompt "Add a health endpoint" --agent claude
+node dist/cli.js run examples/structured.ts --prompt "Fix a parser crash" --json
+node dist/cli.js run examples/parallel.ts --prompt test
+node dist/cli.js run examples/failure.ts --prompt test --json
+node dist/cli.js run examples/parallel.ts --prompt test --events
+```
+
+The last two examples exercise failure and streaming protocols without agents.
+`failure.ts` deliberately exits 1 while preserving its earlier output.
 
 ## Completion and recovery
 
@@ -131,7 +184,9 @@ It does not automatically create worktrees, commit, open PRs, poll remote CI, or
 merge. Those operations belong in custom workflows for now. Local files and inline
 prompts are the task sources in v0.1; GitHub/Linear task fetching is not included.
 
-Run records and command logs live under `.assembler/runs/<id>/`. Add that directory
+Run records, `events.jsonl`, named artifacts and command logs live under
+`.assembler/runs/<id>/`. Run records are replaced atomically; each final result and
+event has `schemaVersion: 1`. Add that directory
 to your project's `.gitignore`. Logs may contain private code or agent output.
 Ctrl+C and command timeouts terminate subprocess groups on macOS/Linux. Windows
 process-tree cancellation is not supported in v0.1. Custom async code must observe

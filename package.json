@@ -4,16 +4,36 @@
   "description": "Coding workflows as code. A small CLI for your software factory.",
   "type": "module",
   "license": "MIT",
-  "bin": { "assembler": "dist/cli.js" },
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=22" },
+  "bin": {
+    "assembler": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
     "test": "tsx --test test/*.test.ts",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc -p tsconfig.examples.json",
     "prepack": "npm run build"
   },
-  "dependencies": { "tsx": "^4.20.0" },
-  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.9.0" }
+  "dependencies": {
+    "log-update": "^8.0.0",
+    "tsx": "^4.20.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
 }
