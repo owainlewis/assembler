@@ -130,6 +130,7 @@ export async function runWorkflow(workflow: Workflow, options: {
   update?: (rows: Row[]) => void;
   event?: (event: RunEvent) => void;
   id?: string; workflowName?: string; createdAt?: string;
+  interrupted?: () => boolean;
 }) {
   const config = validateConfig(options.config);
   const id = options.id ?? `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
@@ -274,8 +275,10 @@ export async function runWorkflow(workflow: Workflow, options: {
     if (signal.aborted) throw new Error("Cancelled");
     record.status = "completed";
   } catch (error) {
-    record.status = cancelled ? "cancelled" : "failed";
+    record.status = cancelled ? (options.interrupted?.() ? "interrupted" : "cancelled") : "failed";
+    if (record.status === 'interrupted') record.cleanup = 'Workflow cleanup was allowed to run; inspect outputs for warnings.';
     record.error = error instanceof Error ? error.message : String(error);
+    if (record.status === 'interrupted') record.error = 'Worker connection lost; no automatic retry. ' + record.error;
     controller.abort();
     await Promise.allSettled([...pending]);
   } finally {

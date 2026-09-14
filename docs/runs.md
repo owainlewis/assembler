@@ -52,6 +52,8 @@ assembler worker stop
 
 Submission automatically starts one worker per project. A kernel lock prevents
 competing workers. The persistent concurrency limit defaults to 1 (range 1–32).
+Dispatch and queued cancellation compete for one immutable per-run claim, so a
+successful queued cancellation cannot subsequently load workflow code.
 Excess work waits oldest first. Lowering the limit does not kill existing work.
 `worker stop` drains active runs, leaving queued work unstarted. A later start
 or detached submission resumes queue processing.

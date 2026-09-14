@@ -5,10 +5,54 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { defaults, runWorkflow } from '../src/index.js';
-import { atomicJSON, cancelRun, listRuns, readRun, runDirectory, streamLogs, terminal, readJSON } from '../src/runs.js';
+import { atomicJSON, claimRun, cancelRun, listRuns, readRun, runDirectory, streamLogs, terminal, readJSON } from '../src/runs.js';
 import { enqueue, startWorker } from '../src/queue.js';
 
 const linux = process.platform === 'linux';
+
+test('late disconnect cannot overwrite completed, failed or cancelled outcomes', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'assembler-late-disconnect-'));
+  try {
+    for (const expected of ['completed', 'failed', 'cancelled']) {
+      const controller = new AbortController();
+      let disconnected = false;
+      let id = '';
+      const workflow = async () => {
+        if (expected === 'cancelled') controller.abort();
+        if (expected === 'failed') throw new Error('original failure');
+      };
+      await runWorkflow(workflow, { project, config: defaults, signal: controller.signal,
+        interrupted: () => disconnected,
+        event: event => {
+          if (event.type === 'run.finished') { id = event.runId; disconnected = true; controller.abort(); }
+        },
+      }).catch(() => {});
+      const record = await readRun(project, id);
+      assert.equal(record.status, expected);
+      if (expected === 'failed') assert.equal(record.error, 'original failure');
+    }
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('queued cancellation and dispatch atomically choose one winner', { skip: !linux, timeout: 30_000 }, async () => {
+  const project = await mkdtemp(join(tmpdir(), 'assembler-claim-race-'));
+  try {
+    await writeFile(join(project, 'flow.ts'), `import { writeFileSync } from 'node:fs';
+      writeFileSync(new URL('./imported', import.meta.url), 'side effect');
+      export default async () => {};`);
+    const jobs = await Promise.all(Array.from({ length: 20 }, () => enqueue(project, 'flow.ts', {}, '', defaults)));
+    for (const job of jobs) {
+      const [cancelled, claim] = await Promise.all([cancelRun(project, job.id), claimRun(project, job.id, 'running')]);
+      if (cancelled === 'cancelled') assert.equal(claim.status, 'cancelled');
+      else { assert.equal(cancelled, 'cancellation requested'); assert.equal(claim.status, 'running'); }
+    }
+    await startWorker(project);
+    await until(async () => (await listRuns(project)).every(record => terminal(record.status)));
+    for (const job of jobs) {
+      await assert.rejects(access(join(runDirectory(project, job.id), 'source', 'imported')));
+    }
+  } finally { await stop(project); await rm(project, { recursive: true, force: true }); }
+});
 
 test('log following reconciles a dead execution and preserves split UTF-8', async () => {
   const project = await mkdtemp(join(tmpdir(), 'assembler-dead-log-'));

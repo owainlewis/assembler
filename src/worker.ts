@@ -2,7 +2,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { atomicJSON, exists, listRuns, readJSON, readRun, runDirectory, terminal } from './runs.js';
+import { atomicJSON, claimRun, exists, listRuns, readJSON, readRun, runDirectory, terminal } from './runs.js';
 import { sibling, staleRun, workerRoot } from './queue.js';
 
 const project = process.argv[2];
@@ -33,11 +33,18 @@ async function tick() {
   for (const record of records.reverse()) {
     if (record.status !== 'queued') continue;
     const dir = runDirectory(project, record.id);
-    if (await exists(join(dir, 'cancel'))) {
+    const cancelled = await exists(join(dir, 'cancel'));
+    if (!cancelled && (stopping || !slots)) continue;
+    const claim = await claimRun(project, record.id, cancelled ? 'cancelled' : 'running');
+    if (claim.status === 'cancelled') {
       await atomicJSON(join(dir, 'run.json'), { ...record, status: 'cancelled', cleanup: 'Not started' });
       continue;
     }
-    if (stopping || !slots) continue;
+    if (!claim.won) {
+      // A previous worker died after claiming but before publishing execution.
+      await atomicJSON(join(dir, 'run.json'), { ...record, status: 'interrupted', error: 'Dispatch was interrupted. No automatic retry.', cleanup: 'Unknown: inspect workflow resources.' });
+      continue;
+    }
     slots--;
     await atomicJSON(join(dir, 'run.json'), { ...record, status: 'running' });
     const log = await open(join(dir, 'console.log'), 'a', 0o600);

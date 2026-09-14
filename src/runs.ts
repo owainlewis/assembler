@@ -1,4 +1,4 @@
-import { readFile, readdir, realpath, rename, writeFile, access, open, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, rename, writeFile, access, open, stat, link, rm } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 import { join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -50,11 +50,26 @@ export function formatRun(record: RunRecord) {
   ].filter(Boolean).join('\n')) + formatOutputs(record);
 }
 
+// Immutable publication: dispatch and queued cancellation compete for one claim.
+// A hard link publishes the complete decision atomically, with no stale lock.
+export async function claimRun(project: string, id: string, status: 'running' | 'cancelled') {
+  const path = join(runDirectory(project, id), 'claim.json');
+  const tmp = path + '.' + randomUUID() + '.tmp';
+  await writeFile(tmp, JSON.stringify({ status }), { mode: 0o600 });
+  try {
+    try { await link(tmp, path); return { status, won: true }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    const claim = await readJSON<{ status: 'running' | 'cancelled' }>(path);
+    if (!['running', 'cancelled'].includes(claim.status)) throw new Error('Invalid run claim');
+    return { status: claim.status, won: false };
+  } finally { await rm(tmp, { force: true }); }
+}
+
 export async function cancelRun(project: string, id: string) {
   const record = await readRun(project, id);
   if (terminal(record.status)) return record.status;
   await writeFile(join(runDirectory(project, id), 'cancel'), '', { mode: 0o600 });
-  if (record.status === 'queued') {
+  if (record.status === 'queued' && (await claimRun(project, id, 'cancelled')).status === 'cancelled') {
     await atomicJSON(join(runDirectory(project, id), 'run.json'), { ...record, status: 'cancelled', cleanup: 'Not started' });
     return 'cancelled';
   }
