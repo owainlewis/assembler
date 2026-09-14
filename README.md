@@ -52,7 +52,7 @@ Add explicit validation commands before using the built-in build workflow:
 {
   "agent": "codex",
   "agents": {
-    "codex": { "command": ["codex", "exec", "--full-auto", "-"], "input": "stdin" },
+    "codex": { "command": ["codex", "exec", "--sandbox", "workspace-write", "-"], "input": "stdin" },
     "claude": { "command": ["claude", "-p", "{prompt}"], "input": "argument" }
   },
   "checks": [["npm", "test"], ["npm", "run", "lint"]],
@@ -72,7 +72,7 @@ To deliberately execute shell syntax in a workflow use `ctx.exec(["sh", "-c", sc
 
 Authenticate the harness separately. Its normal permissions apply; Assembler does
 not bypass them. Configure appropriate noninteractive permissions in the harness
-before unattended runs. Codex's preset uses its `--full-auto` mode; Claude's preset
+before unattended runs. Codex's preset uses its `workspace-write` sandbox; Claude's preset
 leaves permission configuration to you.
 
 ## Write a workflow

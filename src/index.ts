@@ -25,7 +25,7 @@ export const defineWorkflow = (workflow: Workflow): Workflow => workflow;
 export const defaults: Config = {
   agent: "codex",
   agents: {
-    codex: { command: ["codex", "exec", "--full-auto", "-"], input: "stdin" },
+    codex: { command: ["codex", "exec", "--sandbox", "workspace-write", "-"], input: "stdin" },
     claude: { command: ["claude", "-p", "{prompt}"], input: "argument" },
   },
   checks: [], maxRepairs: 3, timeoutMs: 30 * 60_000,
