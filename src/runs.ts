@@ -23,7 +23,10 @@ export async function readRun(project: string, id: string): Promise<RunRecord> {
   const root = await realpath(join(project, '.assembler', 'runs'));
   const dir = await realpath(runDirectory(project, id));
   if (!dir.startsWith(root + sep)) throw new Error('Run directory escapes the project');
-  return readJSON(join(dir, 'run.json'));
+  const record = await readJSON<RunRecord>(join(dir, 'run.json'));
+  if (!record || record.id !== id || typeof record.status !== 'string' ||
+      !Array.isArray(record.rows) || !Array.isArray(record.outputs)) throw new Error('Invalid run record');
+  return record;
 }
 export async function listRuns(project: string): Promise<RunRecord[]> {
   const root = join(project, '.assembler', 'runs');

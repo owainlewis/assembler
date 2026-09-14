@@ -66,6 +66,10 @@ test('run history, step logs, outputs and invalid IDs', async () => {
     const [record] = await listRuns(project);
     assert.equal(record.workflow, 'demo'); assert.equal(record.status, 'completed');
     assert.equal(record.outputs[0].value, 'done');
+    const damaged = runDirectory(project, 'damaged');
+    await mkdir(damaged);
+    await writeFile(join(damaged, 'run.json'), '{}');
+    assert.equal((await listRuns(project)).length, 1);
     let text = '';
     await streamLogs(project, record.id, { step: 'Second' }, value => { text += value; });
     assert.match(text, /second output/); assert.doesNotMatch(text, /first output/);
