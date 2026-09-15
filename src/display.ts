@@ -44,6 +44,6 @@ export function formatOutputs(record: RunRecord): string {
     const text = plain(typeof output.value === "string" ? output.value : JSON.stringify(output.value, null, 2));
     const lines = text.split("\n");
     const excerpt = lines.slice(0, 20).join("\n").slice(0, 2000);
-    return `\n${plain(output.name).replace(/[\r\n]/g, " ")}\n${excerpt}${excerpt.length < text.length ? `\n… Full output: ${output.path}` : ""}\n`;
+    return `\n${plain(output.name).replace(/[\r\n]/g, " ")}\n${excerpt}${excerpt.length < text.length ? `\n… Full output: ${plain(output.path).replace(/[\r\n]/g, " ")}` : ""}\n`;
   }).join("");
 }
