@@ -67,10 +67,24 @@ test("reviews on other commits do not produce review feedback", async () => {
 });
 
 test("latest non-actionable reviews supersede older review feedback", async () => {
-  for (const state of ["APPROVED", "DISMISSED", "PENDING", "COMMENTED"]) {
+  for (const state of ["APPROVED", "DISMISSED", "COMMENTED"]) {
     assert.deepEqual(await reviewFeedback([
       review(1, "CHANGES_REQUESTED"),
       review(2, state),
     ]), [], state);
   }
+});
+
+test("pending drafts do not supersede submitted review feedback", async () => {
+  for (const state of ["CHANGES_REQUESTED", "COMMENTED"]) {
+    const submitted = review(1, state, "alice", "head", "Handle the empty input");
+    assert.deepEqual(await reviewFeedback([
+      submitted,
+      review(2, "PENDING", "alice", "head", "Unsubmitted draft"),
+    ]), [{
+      id: "review-1", body: submitted.body,
+      fingerprint: JSON.stringify([1, submitted.body, state]),
+    }], state);
+  }
+  assert.deepEqual(await reviewFeedback([review(1, "PENDING", "alice", "head", "Draft")]), []);
 });

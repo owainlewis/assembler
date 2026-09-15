@@ -22,7 +22,8 @@ export async function feedback(ctx: Context, repo: string, number: number): Prom
   const latestReviews = new Map<string, any>();
   // Reviews are returned in chronological order, including superseded reviews.
   for (const review of reviews) {
-    if (review.commit_id === pr.headRefOid) latestReviews.set(review.user.login, review);
+    // An unsubmitted draft does not supersede the reviewer's published feedback.
+    if (review.commit_id === pr.headRefOid && review.state !== "PENDING") latestReviews.set(review.user.login, review);
   }
   for (const review of latestReviews.values()) {
     if (review.state !== "CHANGES_REQUESTED" && !(review.state === "COMMENTED" && review.body)) continue;
