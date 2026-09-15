@@ -63,7 +63,8 @@ executable/license, and install locked production dependencies in a temporary
 directory. The build allowlist excludes local configuration, credentials, task
 workspaces and logs. Archives and SHA-256 files land in ignored `release/`.
 
-The GitHub release workflow builds/tests Linux and macOS on x64 and arm64. Manual
+The GitHub release workflow builds/tests Linux and macOS on x64 and arm64, including
+PRs that change packaging scripts, the release workflow or package manifests. Manual
 dispatch produces downloadable Actions artifacts. A pushed `vVERSION` tag matching
 `package.json` publishes a GitHub release only after every platform passes its tests
 and installation smoke test. No release is created on ordinary pushes to main.
