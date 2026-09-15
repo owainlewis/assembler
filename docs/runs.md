@@ -17,7 +17,7 @@ assembler runs cancel <id>
 ```
 
 Named workflows live in `.assembler/workflows/<name>.ts`. You can also pass a
-TypeScript file inside the project or a built-in name. Input flags, configuration
+TypeScript file inside the project or a project-local registration name. Input flags, configuration
 and agent selection work as in the foreground. Detached schema/module-loading
 failures appear in the run record: successful submission is not successful work.
 

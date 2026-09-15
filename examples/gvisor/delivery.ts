@@ -1,4 +1,4 @@
-import type { Feedback } from '../../src/github.js';
+import type { Feedback } from '../lib/github.js';
 import { z } from '../../src/index.js';
 
 export const deliveryResult = z.object({

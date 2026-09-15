@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, access, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import build from "../src/build.js";
+import build from "../examples/task-to-pr.js";
 import { defaults, defineWorkflow, runWorkflow, z } from "../src/index.js";
-import { githubIssue } from "../src/tickets.js";
-import { checkState, waitFeedback } from "../src/github.js";
+import { githubIssue } from "../examples/lib/tickets.js";
+import { checkState, waitFeedback } from "../examples/lib/github.js";
 
 test("issue reference must match the project", () => {
   assert.equal(githubIssue("123", "owner/repo"), 123);

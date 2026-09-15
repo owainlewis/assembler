@@ -1,4 +1,4 @@
-import { type Context } from "./index.js";
+import { type Context } from "../../src/index.js";
 import { jsonCommand, pause } from "./engineering.js";
 
 export interface FeedbackItem { id: string; body: string; threadId?: string; fingerprint: string }

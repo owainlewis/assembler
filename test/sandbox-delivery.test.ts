@@ -7,8 +7,16 @@ import { requireReady } from '../examples/gvisor/delivery.js';
 import { containerArgs, Sandbox } from '../examples/gvisor/sandbox.js';
 import workflow from '../examples/sandbox-delivery.js';
 import { defaults } from '../src/index.js';
-import type { Feedback } from '../src/github.js';
+import type { Feedback } from '../examples/lib/github.js';
 import { prepareGitHubToken } from '../examples/gvisor/credentials.js';
+
+test('sandbox workflow rejects unsupported hosts before starting Docker', { skip: process.platform === 'linux' }, async () => {
+  await assert.rejects(workflow({
+    input: { prompt: 'task', repo: 'owner/repo' }, config: defaults,
+    step: async (_name: string, action: () => Promise<unknown>) => action(),
+    exec: async () => { throw new Error('Must not start Docker'); },
+  } as any), /requires Linux and Codex/);
+});
 
 test('GitHub login sharing is explicit and the temporary token is private and removable', async () => {
   const unread = async () => { throw new Error('must not read login'); };
@@ -74,6 +82,9 @@ test('delivery lifecycle preserves failed work and only deletes a verified succe
           auth: process.execPath, gh: process.execPath, githubToken: process.execPath, certificates: process.execPath },
         output: (name: string, value: unknown) => outputs.push({ name, value }),
         step: async (name: string, action: () => Promise<unknown>) => {
+          // This unit simulation supplies a fake Linux/Docker environment.
+          // The actual platform rejection is tested separately above.
+          if (name === 'Check prerequisites') return;
           if (name !== 'Verify PR completion') return action();
           // Simulate a quiet feedback window without sleeping in a unit test.
           const originalNow = Date.now;

@@ -11,22 +11,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./workflows/task-to-pr": {
-      "types": "./dist/build.d.ts",
-      "import": "./dist/build.js"
-    },
-    "./workflows/fetch-task": {
-      "types": "./dist/fetch-task.d.ts",
-      "import": "./dist/fetch-task.js"
-    },
-    "./workflows/fix-checks": {
-      "types": "./dist/fix-checks.d.ts",
-      "import": "./dist/fix-checks.js"
-    },
-    "./workflows/review-pr": {
-      "types": "./dist/review-pr.d.ts",
-      "import": "./dist/review-pr.js"
     }
   },
   "files": [
@@ -43,7 +27,8 @@
     "fsevents@2.3.3": false
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/build.mjs",
+    "package:binary": "node scripts/package-binary.mjs",
     "test": "tsx --test test/*.test.ts",
     "check": "tsc --noEmit && tsc -p tsconfig.examples.json",
     "prepack": "npm run build"

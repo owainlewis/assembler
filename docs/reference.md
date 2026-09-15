@@ -22,7 +22,7 @@ rewriting the procedure.
 
 There are three separate parts:
 
-- **Assembler CLI:** the command you run, such as `assembler run fix-checks`.
+- **Assembler CLI:** the command you run, such as `assembler run examples/fix-checks.ts`.
 - **Coding-agent SDKs:** Assembler calls `@openai/codex-sdk` or
   `@anthropic-ai/claude-agent-sdk` to run the agent and receive structured results
   and events. These are the default integrations.
@@ -39,12 +39,12 @@ You could prompt an agent: “Fix the tests. Rerun them after each change. Stop 
 two attempts.” A workflow puts that procedure in code:
 
 ```sh
-assembler run fix-checks \
+assembler run examples/fix-checks.ts \
   --input '{"checks":[["npm","test"]],"maxRepairs":2}' \
   --agent codex
 ```
 
-The [built-in workflow](../src/fix-checks.ts) runs `npm test` and reads its exit code.
+The [example workflow](../examples/fix-checks.ts) runs `npm test` and reads its exit code.
 If it fails, the agent gets the failure output and repairs the code. The workflow
 then runs the tests again—even after the last allowed repair.
 
@@ -83,13 +83,15 @@ an `origin` remote for the current GitHub project, and push/PR permissions.
 
 ## Ticket → PR
 
-In your target project, create `assembler.json`:
+The following relative paths assume you are in the **Assembler source checkout**
+after running `npm ci`. The examples are not installed as global workflow commands.
+To try delivery against this repository, create `assembler.json` in that checkout:
 
 ```json
 {
   "agent": "codex",
   "workflows": {
-    "build": {
+    "examples/task-to-pr.ts": {
       "prompt": "Build this task. Follow repository conventions, keep changes focused, and add regression tests.",
       "reviewPrompt": "Run OCR using the repository's documented invocation. Investigate and fix valid findings, then rerun. Report blocked if the tool cannot run.",
       "setup": [["npm", "ci"]],
@@ -103,10 +105,27 @@ Use commands that apply to your project. For Go, omit `setup` and use checks
 such as `["go", "test", "./..."]` and `["go", "vet", "./..."]`.
 
 ```sh
-assembler build --ticket https://github.com/owner/repo/issues/123
-assembler build --ticket 123 --agent claude
-assembler build --ticket ENG-123 --prompt "Build this. Preserve the public API."
+assembler run examples/task-to-pr.ts --ticket https://github.com/owner/repo/issues/123
+assembler run examples/task-to-pr.ts --ticket 123 --agent claude
+assembler run examples/task-to-pr.ts --ticket ENG-123 --prompt "Build this. Preserve the public API."
 ```
+
+For a different target repository, keep the source checkout (and its dependencies)
+available and use an absolute workflow path:
+
+```sh
+assembler run /absolute/path/to/assembler/examples/task-to-pr.ts \
+  --project /absolute/path/to/target-repo \
+  --ticket 123 \
+  --input '{"setup":[["npm","ci"]],"checks":[["npm","test"]]}'
+```
+
+Adjust those paths and check commands to your project. This external-path form is
+foreground-only: detached workflows must live inside their target project. A
+portable release also contains these files under its `app/examples/` directory;
+see [installed example locations](binaries.md#run). Defaults are keyed by the exact
+workflow argument, so the relative-path defaults above do not apply to this
+absolute-path invocation.
 
 The SDK-managed agent fetches tickets using command-line tools, not a built-in
 tracker HTTP client or MCP. GitHub uses `gh issue view`; Linear defaults to the community
@@ -126,13 +145,13 @@ remains an agent judgment, not a byte-for-byte completeness guarantee.
 Test that exact step without editing code or opening a PR:
 
 ```sh
-assembler run fetch-task --ticket 123
-assembler run fetch-task --ticket 361 --input '{"repo":"owainlewis/neo"}' --agent claude
+assembler run examples/fetch-task.ts --ticket 123
+assembler run examples/fetch-task.ts --ticket 361 --input '{"repo":"owainlewis/neo"}' --agent claude
 ```
 
 For another Linear CLI, override the workflow's trusted `linearCommands` argument
 arrays, using `{ticket}` for the identifier. Include commands for both details and
-comments. For example, set the following under `workflows.build` (or
+comments. For example, set the following under `workflows["examples/task-to-pr.ts"]` (or
 `workflows.fetch-task` for the standalone workflow):
 
 ```json
@@ -196,7 +215,7 @@ threads block it. Local agent review does not replace required GitHub approvals.
 
 ### Workflow-owned policy
 
-Use `workflows.build` for project defaults, `--input-file delivery.json` or
+Use `workflows["examples/task-to-pr.ts"]` for project defaults, `--input-file delivery.json` or
 `--input '{...}'` for an invocation. CLI input overrides defaults; `--prompt`
 overrides the input prompt. Inputs are validated before the workflow runs.
 
@@ -206,28 +225,28 @@ Build owns `ticket`, `prompt`, `reviewPrompt`, `linearCommands`, `setup`, `check
 zero. Set `feedbackRepairs: 3` explicitly to retain the former default. These are not runtime-wide settings. Old top-level `checks`/`maxRepairs`
 config is rejected with a migration error.
 
-`assembler run task-to-pr` runs the same implementation, using its own
-`workflows.task-to-pr` defaults. `assembler build` uses `workflows.build`.
+Defaults are keyed by the exact workflow argument. Use `examples/task-to-pr.ts`
+when invoking that path, or your project-local registration name when using a short name.
 
 ## Standard engineering examples
 
 | Workflow | Pattern | Effects |
 | --- | --- | --- |
-| `build` / `task-to-pr` | Ticket → implement → review/repair → checks → PR → feedback/repair → ready | Worktree, commits, PR and explicitly reported thread resolution |
+| `task-to-pr.ts` | Ticket → implement → review/repair → checks → PR → feedback/repair → ready | Worktree, commits, PR and explicitly reported thread resolution |
 | `fetch-task` | Agent runs ticket CLI → validate → save snapshot | Read operations only; same fetch step as build |
 | `fix-checks` | Failing checks → repair → rerun checks | Edits current project; no commit/PR |
 | `review-pr` | Fetch PR → review → independently verify findings | Report only; no published GitHub review/comment |
 
 ```sh
-assembler run fix-checks --input '{"checks":[["npm","test"]],"maxRepairs":2}'
-assembler run review-pr --input '{"pr":123}' --agent claude
+assembler run examples/fix-checks.ts --input '{"checks":[["npm","test"]],"maxRepairs":2}'
+assembler run examples/review-pr.ts --input '{"pr":123}' --agent claude
 ```
 
-The files in `examples/task-to-pr.ts`, `examples/fix-checks.ts`, and
-`examples/review-pr.ts` are entry points to the same implementations, not
-diverging copies. `examples/task-to-pr.input.json` shows delivery inputs.
-Installed consumers can import through
-`@owainlewis/assembler/workflows/task-to-pr`, `/fetch-task`, `/fix-checks`, and `/review-pr`.
+The workflow implementations live in `examples/`; shared engineering helpers live
+in `examples/lib/`. They import only the generic runner API from `src/index.ts`.
+Copy and adapt the examples in your project. `examples/task-to-pr.input.json` shows
+delivery inputs. Workflow-specific package exports and the old `assembler build`
+shortcut have been removed; use `assembler run <path>` or a project registration.
 
 Smaller `outputs.ts`, `structured.ts`, `parallel.ts` and `failure.ts` examples
 exercise output, branching, concurrent-step and failure contracts.
