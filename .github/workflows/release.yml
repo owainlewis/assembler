@@ -27,6 +27,7 @@ jobs:
       - run: npm run package:binary
       - run: node scripts/smoke-binary.mjs
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: binary-${{ matrix.os }}
           path: release/*

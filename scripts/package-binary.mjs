@@ -30,7 +30,7 @@ try {
   await chmod(join(bundle, 'runtime', 'node'), 0o755);
   // Include Node's license alongside its bundled runtime.
   const licenseURL = `https://raw.githubusercontent.com/nodejs/node/${process.version}/LICENSE`;
-  const license = await fetch(licenseURL);
+  const license = await fetch(licenseURL, { signal: AbortSignal.timeout(30_000) });
   if (!license.ok) throw new Error(`Cannot obtain Node license: ${license.status}`);
   await writeFile(join(bundle, 'runtime', 'LICENSE'), await license.text());
   await cp(join(root, 'scripts', 'assembler.sh'), join(bundle, 'bin', 'assembler'));
