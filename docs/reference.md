@@ -83,7 +83,9 @@ an `origin` remote for the current GitHub project, and push/PR permissions.
 
 ## Ticket → PR
 
-In your target project, create `assembler.json`:
+The following relative paths assume you are in the **Assembler source checkout**
+after running `npm ci`. The examples are not installed as global workflow commands.
+To try delivery against this repository, create `assembler.json` in that checkout:
 
 ```json
 {
@@ -107,6 +109,23 @@ assembler run examples/task-to-pr.ts --ticket https://github.com/owner/repo/issu
 assembler run examples/task-to-pr.ts --ticket 123 --agent claude
 assembler run examples/task-to-pr.ts --ticket ENG-123 --prompt "Build this. Preserve the public API."
 ```
+
+For a different target repository, keep the source checkout (and its dependencies)
+available and use an absolute workflow path:
+
+```sh
+assembler run /absolute/path/to/assembler/examples/task-to-pr.ts \
+  --project /absolute/path/to/target-repo \
+  --ticket 123 \
+  --input '{"setup":[["npm","ci"]],"checks":[["npm","test"]]}'
+```
+
+Adjust those paths and check commands to your project. This external-path form is
+foreground-only: detached workflows must live inside their target project. A
+portable release also contains these files under its `app/examples/` directory;
+see [installed example locations](binaries.md#run). Defaults are keyed by the exact
+workflow argument, so the relative-path defaults above do not apply to this
+absolute-path invocation.
 
 The SDK-managed agent fetches tickets using command-line tools, not a built-in
 tracker HTTP client or MCP. GitHub uses `gh issue view`; Linear defaults to the community
