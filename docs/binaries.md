@@ -36,7 +36,6 @@ active workers before upgrading; there is no automatic update mechanism.
 
 ```sh
 assembler run my-workflow.ts --prompt "Fix the parser"
-assembler run examples/task-to-pr.ts --ticket 123
 ```
 
 Git, gh, agent authentication and project-specific tools remain external. Docker,
