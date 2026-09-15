@@ -1,5 +1,13 @@
 # Assembler
 
+`ctx.output(name, value, { detail: true })` saves diagnostic artifacts without
+printing them in the default result. `--verbose`, `--json` and `runs show <id>`
+include them. Normal outputs remain visible by default.
+
+Throw `WorkflowBlocked` (exported by Assembler) for a task that needs user input
+or cannot proceed. It produces terminal status `blocked`, preserves the reason
+and outputs, and exits nonzero. Ordinary errors remain `failed`.
+
 Detailed reference. For installation and a short introduction, see the
 [README](../README.md). For queueing, cancellation and inspecting saved results,
 see [background runs](runs.md).
@@ -83,6 +91,7 @@ In your target project, create `assembler.json`:
   "workflows": {
     "build": {
       "prompt": "Build this task. Follow repository conventions, keep changes focused, and add regression tests.",
+      "reviewPrompt": "Run OCR using the repository's documented invocation. Investigate and fix valid findings, then rerun. Report blocked if the tool cannot run.",
       "setup": [["npm", "ci"]],
       "checks": [["npm", "test"], ["npm", "run", "check"]]
     }
@@ -143,16 +152,42 @@ The delivery workflow:
 1. Agent fetches via CLI; validate and save the task snapshot; claim a local per-ticket lock.
 2. Create/reuse an isolated worktree on a stable branch such as `assembler/github-repo-123`.
 3. Run setup, then pass the ticket and your prompt to the implementation agent.
-4. Run local checks and a fresh, read-only code review. Repair findings and repeat.
-5. Commit, push, and open a PR (or reuse the existing open PR).
-6. Wait for CI and a quiet feedback window; assess comments and unresolved threads.
-7. Repair feedback, repeat local checks/review, and push. Resolve unchanged review
-   threads only after the repair passes validation and review.
+4. An agent reviews and repairs using `reviewPrompt`. Code runs configured checks;
+   failures go directly to a repair agent and are checked again, up to `localRepairs`.
+5. An agent writes the PR description using the review report and actual validation
+   evidence. Code commits, pushes, and opens a PR (or reuses the existing open PR).
+6. Wait for CI and a quiet feedback window. If CI is green and there is no new
+   feedback, no feedback agent is needed.
+7. One agent investigates and addresses new feedback/failed CI, then code validates
+   and pushes repairs. It receives local validation evidence and CI results for the
+   current candidate, not a fresh instruction to implement the whole task. Positive
+   feedback needs no edits or repeated checks. Missing tools block only when needed
+   to investigate or repair outstanding feedback; passing workflow checks are not
+   invalidated by an unnecessary retry inside the agent sandbox.
+   Only thread IDs explicitly reported as fixed are eligible
+   for resolution, after successful checks and a new commit, if their content is
+   unchanged. Agent-reported resolution remains a judgment, not independent proof.
 8. Recheck the remote head, CI, review threads, required reviews and mergeability;
    publish a `Ready` result. **Never merge automatically.**
 
 Setup runs on continuation too; keep it safe to repeat. The original checkout is
 not switched or staged. Worktrees and PRs remain available when a gate stops work.
+Dirty delivery worktrees are refused before setup or editing: inspect and reconcile
+retained changes before rerunning. This is safe continuation, not automatic crash recovery.
+
+`reviewPrompt` is optional; the default asks for review and repair using repository
+conventions and prescribed tools. Configure OCR instructions if you use OCR; it
+must already be available to the agent. Tool failures should be reported as blocked.
+The workflow does not parse OCR output or promise an independent reviewer approval.
+Each agent step currently starts a fresh harness session and receives explicit task
+context; it is not a resumed implementation session.
+
+Local check artifacts retain command arrays, exit codes, captured output, truncation
+flags and full-log paths. Delivery binds successful checks to a Git tree before
+publication and refuses code changes during validation or PR-description generation.
+Checks should be non-mutating; put formatters and generators in setup or agent work.
+After remote repairs, fresh check evidence remains in run logs; the initial PR body
+is not automatically rewritten to claim newer evidence.
 
 A schema-valid agent approval is still a judgment. `Ready` means the observed
 gates passed for the reported commit, not that no future review can arrive.
@@ -165,10 +200,10 @@ Use `workflows.build` for project defaults, `--input-file delivery.json` or
 `--input '{...}'` for an invocation. CLI input overrides defaults; `--prompt`
 overrides the input prompt. Inputs are validated before the workflow runs.
 
-Build owns `ticket`, `prompt`, `linearCommands`, `setup`, `checks`, `base`, `localRepairs`
-(default 3), `feedbackRepairs` (3), `feedbackTimeoutMs` (20 minutes per round),
+Build owns `ticket`, `prompt`, `reviewPrompt`, `linearCommands`, `setup`, `checks`, `base`, `localRepairs`
+(default 3), `feedbackRepairs` (1), `feedbackTimeoutMs` (20 minutes per round),
 `pollMs` (30 seconds), and `reviewQuietMs` (60 seconds). Repair limits can be
-zero. These are not runtime-wide settings. Old top-level `checks`/`maxRepairs`
+zero. Set `feedbackRepairs: 3` explicitly to retain the former default. These are not runtime-wide settings. Old top-level `checks`/`maxRepairs`
 config is rejected with a migration error.
 
 `assembler run task-to-pr` runs the same implementation, using its own
@@ -178,7 +213,7 @@ config is rejected with a migration error.
 
 | Workflow | Pattern | Effects |
 | --- | --- | --- |
-| `build` / `task-to-pr` | Ticket → implement → review/repair → PR → feedback/repair → ready | Worktree, commits, PR and verified thread resolution |
+| `build` / `task-to-pr` | Ticket → implement → review/repair → checks → PR → feedback/repair → ready | Worktree, commits, PR and explicitly reported thread resolution |
 | `fetch-task` | Agent runs ticket CLI → validate → save snapshot | Read operations only; same fetch step as build |
 | `fix-checks` | Failing checks → repair → rerun checks | Edits current project; no commit/PR |
 | `review-pr` | Fetch PR → review → independently verify findings | Report only; no published GitHub review/comment |
@@ -213,15 +248,14 @@ export default defineWorkflow({
     });
     ctx.output("Implementation", implementation.text);
 
-    await ctx.step("Tests", () => ctx.exec(["npm", "test"]));
-
-    const review = await ctx.agent("Review", {
-      readOnly: true,
-      prompt: "Review the current changes for correctness. Do not edit files.",
-      schema: z.object({ approved: z.boolean(), findings: z.array(z.string()) }),
+    const review = await ctx.agent("Review and repair", {
+      prompt: `Review and repair this task: ${ctx.input.prompt}. Use repository review tools. Do not commit or push. Report blocked if required tools are unavailable.`,
+      schema: z.object({ status: z.enum(["completed", "blocked"]), summary: z.string() }),
     });
     ctx.output("Review", review.data);
-    if (!review.data.approved) throw new Error("Review found problems");
+    if (review.data.status === "blocked") throw new Error(review.data.summary);
+    const tests = await ctx.step("Tests", () => ctx.exec(["npm", "test"]));
+    ctx.output("Validation evidence", tests);
   },
 });
 ```

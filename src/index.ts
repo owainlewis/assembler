@@ -16,7 +16,9 @@ export interface Config {
 export { z };
 export interface Result { exitCode: number; stdout: string; stderr: string; log: string; stdoutTruncated?: boolean; stderrTruncated?: boolean }
 export interface Row { id: string; parentId?: string; name: string; status: "running" | "passed" | "failed"; started: number; durationMs?: number; error?: string }
-export interface Output { id: string; stepId?: string; name: string; format: "text" | "json"; path: string; value: unknown }
+export interface Output { id: string; stepId?: string; name: string; format: "text" | "json"; path: string; value: unknown; detail?: boolean }
+const blockedTag = Symbol.for('assembler.WorkflowBlocked');
+export class WorkflowBlocked extends Error { readonly [blockedTag] = true; }
 export interface RunRecord { schemaVersion: 1; id: string; status: string; agent: string; rows: Row[]; outputs: Output[]; error?: string; workflow?: string; createdAt?: string; cleanup?: string }
 export interface RunEvent { schemaVersion: 1; sequence: number; time: string; type: string; runId: string; data: unknown }
 export class RunError extends Error {
@@ -36,7 +38,7 @@ export interface Context<I = unknown> {
   exec(command: string[], options?: { input?: string; allowFailure?: boolean }): Promise<Result>;
   agent: AgentCall;
   agentJson<S extends z.ZodType>(prompt: string, schema: S): Promise<z.output<S>>;
-  output(name: string, value: unknown): Output;
+  output(name: string, value: unknown, options?: { detail?: boolean }): Output;
 }
 export type Workflow = (context: Context<any>) => Promise<void>;
 export function defineWorkflow(workflow: Workflow): Workflow;
@@ -251,7 +253,7 @@ export async function runWorkflow(workflow: Workflow, options: {
       }
       catch (error) { throw new Error(`Invalid structured agent output: ${error instanceof Error ? error.message : String(error)}. Log: ${result.log}`); }
     },
-    output(name, value) {
+    output(name, value, options = {}) {
       if (finished) throw new Error("Run already finished");
       const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
       if (text === undefined) throw new Error("Output must be text or JSON-serializable data");
@@ -259,7 +261,7 @@ export async function runWorkflow(workflow: Workflow, options: {
       const format = typeof value === "string" ? "text" : "json";
       const path = join(directory, `${outputId}.${format === "text" ? "txt" : "json"}`);
       writeFileSync(path, text, { mode: 0o600 });
-      const output: Output = { id: outputId, stepId: storage.getStore(), name, format, path, value: format === "text" ? text : JSON.parse(text) };
+      const output: Output = { id: outputId, stepId: storage.getStore(), name, format, path, value: format === "text" ? text : JSON.parse(text), ...(options.detail ? { detail: true } : {}) };
       record.outputs.push(output); save(); emit("output.created", output);
       return output;
     },
@@ -275,7 +277,9 @@ export async function runWorkflow(workflow: Workflow, options: {
     if (signal.aborted) throw new Error("Cancelled");
     record.status = "completed";
   } catch (error) {
-    record.status = cancelled ? (options.interrupted?.() ? "interrupted" : "cancelled") : "failed";
+    // Source workflows and the compiled CLI can load separate copies of this module.
+    record.status = cancelled ? (options.interrupted?.() ? "interrupted" : "cancelled") :
+      error instanceof Error && Reflect.get(error, blockedTag) === true ? "blocked" : "failed";
     if (record.status === 'interrupted') record.cleanup = 'Workflow cleanup was allowed to run; inspect outputs for warnings.';
     record.error = error instanceof Error ? error.message : String(error);
     if (record.status === 'interrupted') record.error = 'Worker connection lost; no automatic retry. ' + record.error;

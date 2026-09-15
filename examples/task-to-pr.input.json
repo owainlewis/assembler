@@ -1,8 +1,9 @@
 {
   "ticket": "https://github.com/owner/repository/issues/123",
   "prompt": "Build this task. Prefer the simplest solution consistent with the repository conventions. Add regression tests for the acceptance criteria.",
+  "reviewPrompt": "Run OCR using this project's documented invocation, investigate its findings, and address valid issues. Rerun OCR after repairs. Report the findings, resolutions and any verification gaps. If OCR is unavailable, report blocked rather than claiming review passed.",
   "setup": [["npm", "ci"]],
   "checks": [["npm", "test"], ["npm", "run", "check"]],
   "localRepairs": 3,
-  "feedbackRepairs": 3
+  "feedbackRepairs": 1
 }

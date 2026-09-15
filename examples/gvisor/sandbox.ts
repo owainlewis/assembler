@@ -7,6 +7,7 @@ export interface SandboxFiles {
   codex: string;
   auth: string;
   certificates: string;
+  github?: { cli: string; token: string };
 }
 
 // Example-local helper, not an Assembler backend or built-in workflow.
@@ -31,6 +32,7 @@ export function containerArgs(name: string, image: string, files: SandboxFiles, 
       ...mount(join(dirname(files.codex), 'codex-code-mode-host'), '/opt/codex-code-mode-host'),
       ...mount(files.certificates, '/etc/ssl/certs/ca-certificates.crt'),
       ...mount(files.auth, '/home/node/.codex/auth.json'),
+      ...(files.github ? [...mount(files.github.cli, '/opt/gh'), ...mount(files.github.token, '/run/secrets/github-token')] : []),
     ] : []),
     image, 'sleep', 'infinity'];
 }
@@ -50,11 +52,16 @@ export class Sandbox {
     return this.ctx.exec(['docker', 'exec', ...(options.input !== undefined ? ['-i'] : []), this.name, ...command], options);
   }
 
-  async runPrompt(prompt: string, timeoutSeconds = 180) {
-    await this.exec(['timeout', String(timeoutSeconds), '/opt/codex', 'exec', '--skip-git-repo-check', '--ephemeral',
+  async runPrompt(prompt: string, timeoutSeconds = 180, github = false, schema?: object) {
+    if (schema) await this.exec(['sh', '-c', 'cat > /tmp/result-schema.json'], { input: JSON.stringify(schema) });
+    const command = ['timeout', String(timeoutSeconds), '/opt/codex', 'exec', '--skip-git-repo-check', '--ephemeral',
       '--disable', 'apps',
       '--ignore-user-config', '--ignore-rules', '--sandbox', 'danger-full-access',
-      '--color', 'never', '--output-last-message', '/tmp/answer.md', '-'], { input: prompt });
+      '--color', 'never', ...(schema ? ['--output-schema', '/tmp/result-schema.json'] : []), '--output-last-message', '/tmp/answer.md', '-'];
+    // The token value never enters host command arguments or workflow outputs.
+    await this.exec(github ? ['sh', '-ec',
+      'export HOME=/home/node PATH=/opt:$PATH; GH_TOKEN=$(cat /run/secrets/github-token); export GH_TOKEN; gh auth setup-git; exec "$@"',
+      'delivery', ...command] : command, { input: prompt });
     return (await this.exec(['cat', '/tmp/answer.md'])).stdout;
   }
 

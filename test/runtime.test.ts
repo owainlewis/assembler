@@ -80,6 +80,7 @@ test("cancellation stops an active process", async () => {
 
 test("fix-checks cannot report success when its repair budget is exhausted", async () => {
   await assert.rejects(fixChecks({ task: "fix", input: { checks: [["test"]], maxRepairs: 0 }, project: ".", config: defaults, signal: new AbortController().signal,
+    output: () => ({}),
     step: async (_, action) => action(),
     agent: async () => ({ exitCode: 0, stdout: "", stderr: "", log: "" }),
     exec: async () => ({ exitCode: 1, stdout: "bad", stderr: "", log: "" }),

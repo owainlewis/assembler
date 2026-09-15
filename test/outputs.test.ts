@@ -3,8 +3,35 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaults, runWorkflow, RunError, z, execute } from "../src/index.js";
+import { defaults, runWorkflow, RunError, WorkflowBlocked, z, execute } from "../src/index.js";
 import { formatOutputs, formatRow } from "../src/display.js";
+import { terminal } from '../src/runs.js';
+
+test('blocked outcomes are terminal and details are retained without cluttering output', () => fixture(async project => {
+  await assert.rejects(runWorkflow(async ctx => {
+    ctx.output('Result', 'Needs clarification');
+    ctx.output('Image', 'private-detail', { detail: true });
+    throw new WorkflowBlocked('Supply a coding task');
+  }, { project, config: defaults }), (error: unknown) => {
+    assert.ok(error instanceof RunError);
+    assert.equal(error.record.status, 'blocked');
+    assert.ok(terminal(error.record.status));
+    assert.doesNotMatch(formatOutputs(error.record), /private-detail/);
+    assert.match(formatOutputs(error.record, true), /private-detail/);
+    assert.equal(error.record.outputs.length, 2);
+    return true;
+  });
+}));
+
+test('blocked errors survive separate workflow and CLI module instances', () => fixture(async project => {
+  const error = Object.assign(new Error('Needs input'), { [Symbol.for('assembler.WorkflowBlocked')]: true });
+  assert.ok(!(error instanceof WorkflowBlocked));
+  await assert.rejects(runWorkflow(async () => { throw error; }, { project, config: defaults }), (failure: unknown) => {
+    assert.ok(failure instanceof RunError);
+    assert.equal(failure.record.status, 'blocked');
+    return true;
+  });
+}));
 
 async function fixture(action: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), "assembler-outputs-"));

@@ -39,8 +39,8 @@ export function progress(enabled: boolean, live = Boolean(process.stderr.isTTY))
   };
 }
 
-export function formatOutputs(record: RunRecord): string {
-  return record.outputs.map(output => {
+export function formatOutputs(record: RunRecord, details = false): string {
+  return record.outputs.filter(output => details || !output.detail).map(output => {
     const text = plain(typeof output.value === "string" ? output.value : JSON.stringify(output.value, null, 2));
     const lines = text.split("\n");
     const excerpt = lines.slice(0, 20).join("\n").slice(0, 2000);

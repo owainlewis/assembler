@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { containerArgs } from '../examples/gvisor/sandbox.js';
-import { collectPatch, repositoryURL } from '../examples/gvisor/repository.js';
+import { collectPatch, repositoryURL, resolveRepository } from '../examples/gvisor/repository.js';
+import { execute } from '../src/index.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,12 +32,32 @@ test('patch collection refuses truncated results', async () => {
   } finally { await rm(dir, { recursive: true }); }
 });
 
-test('repository tasks accept only explicit public GitHub HTTPS URLs', () => {
+test('repository tasks normalize GitHub URLs to credential-free HTTPS', () => {
   assert.equal(repositoryURL('owainlewis/assembler'), 'https://github.com/owainlewis/assembler.git');
   assert.equal(repositoryURL('https://github.com/owainlewis/neo.git'), 'https://github.com/owainlewis/neo.git');
+  assert.equal(repositoryURL('git@github.com:owainlewis/neo.git'), 'https://github.com/owainlewis/neo.git');
+  assert.equal(repositoryURL('ssh://git@github.com/owainlewis/neo.git'), 'https://github.com/owainlewis/neo.git');
   for (const value of ['--upload-pack=evil', 'file:///root/repo', 'https://evil.com/x/y', 'x/../y', 'x/y?token=secret']) {
     assert.throws(() => repositoryURL(value), /public GitHub/);
   }
+});
+
+test('repository discovery uses the selected checkout origin and permits explicit override', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'assembler-origin-'));
+  const ctx = { exec: (command: string[]) => execute(command, dir, join(dir, 'git.log'), new AbortController().signal, 5000) };
+  try {
+    await assert.rejects(resolveRepository(ctx), /No Git origin/);
+    await ctx.exec(['git', 'init', '--quiet']);
+    await assert.rejects(resolveRepository(ctx), /No Git origin/);
+    await ctx.exec(['git', 'remote', 'add', 'origin', 'git@github.com:owainlewis/neo.git']);
+    assert.equal(await resolveRepository(ctx), 'https://github.com/owainlewis/neo.git');
+    await ctx.exec(['git', 'remote', 'set-url', 'origin', 'https://github.com/example/another.git']);
+    assert.equal(await resolveRepository(ctx), 'https://github.com/example/another.git');
+    assert.equal(await resolveRepository({ exec: async () => { throw new Error('must not query Git'); } }, 'example/override'), 'https://github.com/example/override.git');
+    await ctx.exec(['git', 'remote', 'set-url', 'origin', 'git@gitlab.com:example/repo.git']);
+    await assert.rejects(resolveRepository(ctx), /public GitHub/);
+    await assert.rejects(resolveRepository({ exec: async () => ({ exitCode: 0, stdout: 'example/repo', stderr: '', log: '', stdoutTruncated: true }) }), /truncated/);
+  } finally { await rm(dir, { recursive: true }); }
 });
 
 test('repository tasks do not mount the demo fixture tests', () => {

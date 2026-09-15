@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { RunRecord } from './index.js';
 import { plain, formatOutputs } from './display.js';
 
-export const terminal = (status: string) => ['completed', 'failed', 'cancelled', 'interrupted'].includes(status);
+export const terminal = (status: string) => ['completed', 'blocked', 'failed', 'cancelled', 'interrupted'].includes(status);
 export const newRunId = () => `${new Date().toISOString().replaceAll(':', '-')}-${randomUUID().slice(0, 8)}`;
 export function runDirectory(project: string, id: string) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(id)) throw new Error('Invalid run ID');
@@ -47,7 +47,7 @@ export function formatRun(record: RunRecord) {
     record.error ? `Reason: ${record.error}` : '',
     record.cleanup ? `Cleanup: ${record.cleanup}` : '',
     ...record.rows.map(row => `  ${row.status}  ${row.name}${row.error ? ` — ${row.error}` : ''}`),
-  ].filter(Boolean).join('\n')) + formatOutputs(record);
+  ].filter(Boolean).join('\n')) + formatOutputs(record, true);
 }
 
 // Immutable publication: dispatch and queued cancellation compete for one claim.

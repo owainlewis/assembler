@@ -2,4 +2,5 @@ node_modules/
 dist/
 .assembler/runs/
 .assembler/demos/
+.assembler/sandboxes/
 .assembler/worker*

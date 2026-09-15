@@ -1,5 +1,80 @@
 # Tasks inside gVisor
 
+Normal output shows the answer, code-change result and cleanup status. Image hashes,
+source commits and artifact paths remain in `assembler runs show <id>`. Use
+`--verbose` to print these details at completion, or `--json` for the full record.
+Follow command output with `assembler runs logs <id> --follow`.
+
+Delivery agents return `ready`, `blocked` or `no_changes`. A blocked task ends with
+its actual reason, not a missing-PR error. Only `ready` enters PR verification;
+an unchanged checkout is removed for blocked/no-change outcomes. Other failed work
+is retained conservatively, including ignored files. `blocked` is a terminal run
+status with a nonzero CLI exit code, not a successful delivery.
+
+## One-agent delivery: task → PR
+
+```sh
+assembler run sandbox-delivery --prompt "Fix issue 123" --input '{"githubAuth":"gh"}' --detach
+```
+
+This project-local workflow clones the current project's GitHub origin at `main`,
+records its commit, creates a unique task branch, and runs **one Codex session**.
+The agent implements, reviews, tests, writes the PR description, publishes and
+monitors CI, with instructions to allow at most two repair rounds. Code then stops
+the sandbox and independently checks the exact PR head, CI, unresolved threads,
+required approvals, draft status and mergeability before reporting `Ready`.
+It never merges. The agent's repair-round limit is a prompt instruction; its
+execution timeout is enforced. This workflow does not add a scripted repair loop.
+
+Prerequisites below apply, plus a host `gh` login for verification, a compatible
+Linux `gh` executable (default `/usr/bin/gh`). Explicitly choose authentication:
+
+- `githubAuth: "gh"` reuses the workflow user's existing GitHub login. Its token is
+  captured without workflow logging, written to a private temporary file, mounted
+  read-only, and the temporary copy removed during cleanup. This shares the login's
+  full token permissions; it does **not** narrow them to the task repository.
+- `githubToken: "/absolute/path/to/token"` supplies your own plain token file
+  (not a gh configuration file). Prefer a repository-scoped token with restrictive
+  file permissions and access to branch pushes and PR/CI operations. Your original
+  file is never deleted by the workflow.
+
+The token value is not passed in host command arguments. SIGKILL/host failure may
+leave temporary credentials behind; ordinary success, failure and cancellation
+run cleanup. An orphaned container may still hold credentials until removed.
+**The agent can read and exfiltrate this token. Use only trusted tasks and code.**
+GitHub-side permissions, not the prompt, constrain what that token can do.
+
+```sh
+assembler run sandbox-delivery --prompt "Fix issue 123" \
+  --input '{"base":"main","githubToken":"/absolute/path/to/token"}'
+```
+
+Or run `node dist/cli.js run examples/sandbox-delivery.ts --prompt "Fix issue 123" --input '{"githubAuth":"gh"}'`.
+The implementation is [ordinary TypeScript](../sandbox-delivery.ts), with the
+development instructions in [Markdown](prompts/delivery.md). It uses the existing
+gVisor CLI helper, not the host SDK adapter. No additional core DSL or backend.
+
+The default agent budget is 20 minutes, followed by up to two minutes of final
+verification. Missing checks or approval requirements block readiness. Free-text
+review comments are assessed by the agent; code verifies registered GitHub gates,
+not the correctness of its judgment. Verification reflects observed GitHub state,
+not a guarantee that no later review will arrive.
+
+Artifacts live under `.assembler/sandboxes/delivery-*`, with normal Assembler run
+logs. Success exports a binary patch, then removes the container and checkout.
+Failure/cancellation removes the container but retains the **full checkout** unless
+it was verified unchanged, including ignored/untracked files. Unpushed work is
+retained. Inspect that directory before deleting it; ignored files
+may include sensitive material. If cleanup fails, the exact container is reported.
+Host failure/SIGKILL can still orphan containers; there is no daemon-side expiry.
+
+V1 starts **new tasks on public GitHub repositories**. Use `base` for a branch other
+than `main` and `repo` to override discovery. An optional `assembler/...` branch
+name must not already exist remotely. Existing-PR continuation remains the `build`
+workflow; this example deliberately refuses to overwrite an existing task branch.
+
+## Read-only task demo
+
 These are repository examples, not built-in backends. On a configured Linux
 checkout, run the same workflow in the background:
 
@@ -17,17 +92,17 @@ and submit each separately. See [background run semantics](../../docs/runs.md).
 
 ## Review the latest Assembler code
 
-On this development server, the launcher and project workflow are installed:
+From the project directory on this development server, the launcher and workflow are installed:
 
 ```sh
 assembler run gvisor-task --prompt "Review the code"
 ```
 
 This works from the root shell without Node paths or environment flags. The local
-`/usr/local/bin/assembler` launcher defaults to this checkout, selects its Node
+`/usr/local/bin/assembler` launcher respects the caller's current directory, selects its Node
 installation, and drops root to `machinist` with temporary Docker group access.
 It does not change your shell's PATH or grant permanent group membership. `--project` overrides
-the configured project. The registration lives in `.assembler/workflows/gvisor-task.ts`,
+the current directory. The registration lives in `.assembler/workflows/gvisor-task.ts`,
 not in the core runtime. Other machines still need their own installation and Docker
 permissions; this is a local development launcher, not an npm release.
 
@@ -37,7 +112,17 @@ Without that local installation, run from a checkout with Node and Docker access
 node dist/cli.js run examples/gvisor-task.ts --prompt "Review the code"
 ```
 
-The default repository is **owainlewis/assembler**. Every run clones its latest
+The default repository comes from `git remote get-url origin` in the selected
+project (the current directory unless `--project` is supplied). GitHub HTTPS,
+`git@github.com:owner/repo.git`, and `ssh://git@github.com/owner/repo.git` remotes
+are normalized to credential-free HTTPS. No origin or an unsupported host produces
+an error, not a fallback to another repository. With `--detach`, this lookup happens
+when the queued workflow executes. An explicit `repo` input overrides discovery.
+
+The short workflow name is still project-local: another project needs the workflow
+and its registration installed there. Repository discovery does not install workflows.
+
+Every run clones the remote's latest
 default branch inside a new gVisor container, records the exact commit, runs your
 prompt, saves the response and a patch, then removes the container and clone.
 It does not share your local checkout, include unpushed changes, or provide GitHub

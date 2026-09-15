@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile, writeFile, mkdir, realpath } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { resolve, join, basename } from "node:path";
 import { parseArgs, format } from "node:util";
 import { defaults, runWorkflow, RunError, validateConfig, type Config, type RunRecord } from "./index.js";
 import { progress, formatOutputs, plain } from "./display.js";
@@ -11,7 +11,7 @@ import { cancelRun, formatRun, listRuns, readRun, streamLogs, readJSON } from '.
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     task: { type: "string" }, prompt: { type: "string" }, project: { type: "string", default: "." },
-    agent: { type: "string" }, json: { type: "boolean" }, events: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    agent: { type: "string" }, json: { type: "boolean" }, events: { type: "boolean" }, verbose: { type: "boolean" }, help: { type: "boolean", short: "h" },
     input: { type: "string" }, "input-file": { type: "string" }, ticket: { type: "string" },
     detach: { type: 'boolean' }, follow: { type: 'boolean' }, step: { type: 'string' }, concurrency: { type: 'string' },
   } });
@@ -110,7 +110,7 @@ async function main() {
   let run: string | undefined, record: RunRecord | undefined;
   try {
     const workflow = await loadWorkflow(resolveWorkflow(project, name).path);
-    if (!machine) process.stderr.write(`\nassembler · ${plain(name)} · ${plain(String(input.ticket ?? values.task ?? "task"))}\n\n`);
+    if (!machine) process.stderr.write(`\nassembler · ${plain(name)} · ${plain(String(input.ticket ?? values.task ?? basename(project)))}\n\n`);
     try {
       run = await runWorkflow(workflow, { task, input, project, config, workflowName: name, signal: controller.signal,
         update: ui.update, event: values.events ? event => process.stdout.write(JSON.stringify(event) + "\n") : undefined });
@@ -125,9 +125,11 @@ async function main() {
   }
   if (values.json) process.stdout.write(JSON.stringify({ ...record, run }) + "\n");
   else if (!values.events && record) {
-    process.stdout.write(formatOutputs(record));
-    if (record.error) process.stderr.write(`\n${plain(record.error)}\n`);
-    process.stdout.write(`\n${record.status === "completed" ? "Completed" : record.status} · ${run}\n`);
+    // Keep the human summary on one stream so its reason precedes cleanup/results.
+    if (record.error) process.stdout.write(`\n${plain(record.error)}\n`);
+    process.stdout.write(formatOutputs(record, values.verbose));
+    const label = record.status === "completed" ? "Completed" : record.status === "blocked" ? "Blocked" : record.status;
+    process.stdout.write(`\n${label} · ${record.id}\nDetails: assembler runs show ${record.id}\nLogs: assembler runs logs ${record.id} --follow\n`);
   }
 }
 main().catch(error => {
