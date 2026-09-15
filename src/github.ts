@@ -19,8 +19,14 @@ export async function feedback(ctx: Context, repo: string, number: number): Prom
     id: thread.id, threadId: thread.id, body: thread.comments.nodes.map((comment: any) => comment.body).join("\n"), fingerprint: JSON.stringify(thread.comments.nodes),
   }));
   const reviews = (await jsonCommand<any[][]>(ctx, ["gh", "api", `repos/${repo}/pulls/${number}/reviews`, "--paginate", "--slurp"])).flat();
+  const latestReviews = new Map<string, any>();
+  // Reviews are returned in chronological order, including superseded reviews.
   for (const review of reviews) {
-    if (review.commit_id !== pr.headRefOid || ["APPROVED", "DISMISSED", "PENDING"].includes(review.state) || (!review.body && review.state !== "CHANGES_REQUESTED")) continue;
+    // An unsubmitted draft does not supersede the reviewer's published feedback.
+    if (review.commit_id === pr.headRefOid && review.state !== "PENDING") latestReviews.set(review.user.login, review);
+  }
+  for (const review of latestReviews.values()) {
+    if (review.state !== "CHANGES_REQUESTED" && !(review.state === "COMMENTED" && review.body)) continue;
     items.push({ id: `review-${review.id}`, body: review.body || "Changes requested", fingerprint: JSON.stringify([review.id, review.body, review.state]) });
   }
   // Issue comments may contain asynchronous review summaries as well as inline threads.
