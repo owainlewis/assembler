@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,7 +11,7 @@ const label = `assembler-${pkg.version}-${process.platform}-${process.arch}`;
 const archive = resolve('release', `${label}.tar.gz`);
 const digest = createHash('sha256').update(await readFile(archive)).digest('hex');
 assert.equal((await readFile(`${archive}.sha256`, 'utf8')).split(' ')[0], digest);
-const temporary = await mkdtemp(join(tmpdir(), 'assembler-release-smoke-'));
+const temporary = await realpath(await mkdtemp(join(tmpdir(), 'assembler-release-smoke-')));
 const prefix = join(temporary, 'installation with spaces');
 const project = join(temporary, 'project');
 let cli;
