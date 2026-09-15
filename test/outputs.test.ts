@@ -89,6 +89,12 @@ test("long outputs are previewed and terminal escape codes are removed", () => {
   assert.match(formatRow({ id: "1", name: "Check", status: "passed", started: 0, durationMs: 65000 }), /1m 5s/);
 });
 
+test("truncation notices sanitise terminal escapes and newlines in output paths", () => {
+  const value = "x".repeat(2001);
+  const text = formatOutputs({ schemaVersion: 1, id: "id", status: "completed", agent: "fake", rows: [], outputs: [{ id: "out", name: "Result", format: "text", path: "/tmp/\x1b[2Jproject\nname\r/out", value }] });
+  assert.equal(text, `\nResult\n${"x".repeat(2000)}\n… Full output: /tmp/project name/out\n`);
+});
+
 test("NDJSON is a complete ordered lifecycle on failure", () => fixture(async project => {
   await writeFile(join(project, "fail.ts"), `export default async ctx => { await ctx.step('Broken', async () => { throw new Error('deliberate'); }); };`);
   const result = await execute([process.execPath, "--import", "tsx", join(import.meta.dirname, "../src/cli.ts"), "run", "fail.ts", "--project", project, "--prompt", "test", "--events"], process.cwd(), join(project, "cli.log"), new AbortController().signal, 10_000);
