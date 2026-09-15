@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute, harnessInput, runWorkflow, defaults, validateConfig } from "../src/index.js";
-import fixChecks from "../src/fix-checks.js";
+import fixChecks from "../examples/fix-checks.js";
 
 test("prompts remain literal arguments, including shell syntax", async () => {
   const prompt = '`touch bad` $(echo bad) "quotes"\nline';

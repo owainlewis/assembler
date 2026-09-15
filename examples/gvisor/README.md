@@ -70,7 +70,7 @@ Host failure/SIGKILL can still orphan containers; there is no daemon-side expiry
 
 V1 starts **new tasks on public GitHub repositories**. Use `base` for a branch other
 than `main` and `repo` to override discovery. An optional `assembler/...` branch
-name must not already exist remotely. Existing-PR continuation remains the `build`
+name must not already exist remotely. Existing-PR continuation remains the `examples/task-to-pr.ts`
 workflow; this example deliberately refuses to overwrite an existing task branch.
 
 ## Read-only task demo

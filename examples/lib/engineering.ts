@@ -1,4 +1,4 @@
-import { z, type Context, type Result } from "./index.js";
+import { z, type Context, type Result } from "../../src/index.js";
 
 export const commandSchema = z.array(z.string()).min(1).refine(command => !!command[0]?.trim(), "Executable must not be empty");
 export const reviewSchema = z.object({

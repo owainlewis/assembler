@@ -16,7 +16,7 @@ export async function enqueue(project: string, name: string, input: unknown, tas
   const resolved = resolveWorkflow(project, name);
   const original = await realpath(resolved.path);
   const relativeEntry = relative(project, original);
-  if (!resolved.builtin && (relativeEntry.startsWith('..' + sep) || relativeEntry === '..')) throw new Error('Detached workflows must live inside the project');
+  if (relativeEntry.startsWith('..' + sep) || relativeEntry === '..') throw new Error('Detached workflows must live inside the project');
   const id = newRunId();
   const dir = runDirectory(project, id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -26,6 +26,7 @@ export async function enqueue(project: string, name: string, input: unknown, tas
     const filter = async (path: string) => {
       const rel = relative(project, path);
       const parts = rel.split(sep);
+      if (parts[0] === 'release' && parts.length === 2 && /^assembler-.*\.tar\.gz(?:\.sha256)?$/.test(parts[1])) return false;
       if (parts.some(part => ['.git', 'node_modules', '.codex', '.ssh', '.env'].includes(part) || part.startsWith('.env.'))) return false;
       if (parts[0] === '.assembler' && parts.length > 1 && parts[1] !== 'workflows') return false;
       // No symlink dereferencing into unrelated workspaces or credentials.
@@ -48,13 +49,7 @@ export async function enqueue(project: string, name: string, input: unknown, tas
     const installation = dirname(fileURLToPath(import.meta.url));
     const dependencies = join(dirname(installation), 'node_modules');
     await symlink(await exists(join(project, 'node_modules')) ? join(project, 'node_modules') : dependencies, join(source, 'node_modules'), 'dir');
-    let entry = join(source, relativeEntry);
-    if (resolved.builtin) {
-      const runtime = join(dir, 'runtime');
-      await cp(installation, runtime, { recursive: true });
-      await symlink(dependencies, join(runtime, 'node_modules'), 'dir');
-      entry = join(runtime, relative(installation, original));
-    }
+    const entry = join(source, relativeEntry);
     const request: Request = { id, name, project, entry, input, task, config, createdAt: new Date().toISOString() };
     await atomicJSON(join(dir, 'request.json'), request);
     const record: RunRecord = { schemaVersion: 1, id, status: 'queued', workflow: name, agent: config.agent, createdAt: request.createdAt, rows: [], outputs: [] };

@@ -231,8 +231,13 @@ test('snapshot rejects escaping workflows and excludes artifacts and secrets', {
   try {
     await writeFile(join(project, 'flow.ts'), 'export default async () => {};');
     await writeFile(join(project, '.env'), 'SECRET=not-for-snapshot');
+    await mkdir(join(project, 'release'));
+    await writeFile(join(project, 'release', 'assembler-0.1.0-linux-x64.tar.gz'), 'generated archive');
+    await writeFile(join(project, 'release', 'notes.md'), 'keep project release notes');
     const job = await enqueue(project, 'flow.ts', {}, '', defaults);
     await assert.rejects(access(join(runDirectory(project, job.id), 'source', '.env')));
+    await assert.rejects(access(join(runDirectory(project, job.id), 'source', 'release', 'assembler-0.1.0-linux-x64.tar.gz')));
+    await access(join(runDirectory(project, job.id), 'source', 'release', 'notes.md'));
     await assert.rejects(enqueue(project, '../elsewhere.ts', {}, '', defaults));
     await symlink('/etc/passwd', join(project, 'outside'));
     await assert.rejects(enqueue(project, 'flow.ts', {}, '', defaults), /symlinks/);

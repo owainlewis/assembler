@@ -11,15 +11,19 @@ import { cancelRun, formatRun, listRuns, readRun, streamLogs, readJSON } from '.
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     task: { type: "string" }, prompt: { type: "string" }, project: { type: "string", default: "." },
-    agent: { type: "string" }, json: { type: "boolean" }, events: { type: "boolean" }, verbose: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    agent: { type: "string" }, json: { type: "boolean" }, events: { type: "boolean" }, verbose: { type: "boolean" }, version: { type: "boolean" }, help: { type: "boolean", short: "h" },
     input: { type: "string" }, "input-file": { type: "string" }, ticket: { type: "string" },
     detach: { type: 'boolean' }, follow: { type: 'boolean' }, step: { type: 'string' }, concurrency: { type: 'string' },
   } });
   if (values.json && values.events) throw new Error("Choose --json or --events");
-  const [command, requestedName = "build"] = positionals;
-  const name = command === "build" ? "build" : requestedName;
+  if (values.version) {
+    const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    process.stdout.write(values.json ? JSON.stringify({ version }) + '\n' : version + '\n');
+    return;
+  }
+  const [command, name] = positionals;
   if (values.help || !command) {
-    console.log('Assembler · coding workflows as code\n\nassembler run workflow.ts --prompt "Your task" [--detach]\nassembler runs list\nassembler runs show <id>\nassembler runs logs <id> [--follow] [--step "Step name"]\nassembler runs cancel <id>\nassembler worker start [--concurrency 2]\nassembler worker status\nassembler worker stop\nassembler init [--project .]\nassembler build --ticket ENG-123\n\n--project: project directory; --agent: selected harness\n--input / --input-file: workflow inputs; --json: machine-readable output\n--events: foreground NDJSON progress; --detach: queue on the local Linux worker');
+    console.log('Assembler · coding workflows as code\n\nassembler run workflow.ts --prompt "Your task" [--detach]\nassembler runs list\nassembler runs show <id>\nassembler runs logs <id> [--follow] [--step "Step name"]\nassembler runs cancel <id>\nassembler worker start [--concurrency 2]\nassembler worker status\nassembler worker stop\nassembler init [--project .]\n\n--version: installed version; --verbose: include diagnostic output\n--project: project directory; --agent: selected harness\n--input / --input-file: workflow inputs; --json: machine-readable output\n--events: foreground NDJSON progress; --detach: queue on the local Linux worker');
     return;
   }
   const project = await realpath(resolve(values.project!));
@@ -77,7 +81,8 @@ async function main() {
     console.log("Created assembler.json. Supply workflow inputs with --input or --input-file.");
     return;
   }
-  if (command !== "run" && command !== "build") throw new Error(`Unknown command: ${command}`);
+  if (command !== "run") throw new Error(command === 'build' ? 'Use assembler run examples/task-to-pr.ts --ticket <issue>. Workflows now live in examples, not the core.' : `Unknown command: ${command}`);
+  if (!name) throw new Error('Supply a workflow: assembler run workflow.ts');
   if (values.input !== undefined && values["input-file"] !== undefined) throw new Error("Choose --input or --input-file");
   let input: Record<string, unknown> = values.input !== undefined ? JSON.parse(values.input) : values["input-file"] !== undefined ? JSON.parse(await readFile(resolve(project, values["input-file"]), "utf8")) : {};
   if (!input || Array.isArray(input) || typeof input !== "object") throw new Error("Workflow input must be an object");
@@ -86,8 +91,7 @@ async function main() {
   try { custom = JSON.parse(await readFile(join(project, "assembler.json"), "utf8")); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   input = { ...custom.workflows?.[name], ...input, ...(values.prompt ? { prompt: values.prompt } : {}), ...(values.ticket ? { ticket: values.ticket } : {}) };
-  if (command === "build" && values.task) input.ticket = values.task;
-  const task = command === "build" ? String(input.ticket ?? "") : values.task ? await readFile(resolve(project, values.task), "utf8") : values.prompt ?? "";
+  const task = values.task ? await readFile(resolve(project, values.task), "utf8") : values.prompt ?? "";
   const { workflows, ...runtime } = custom;
   const config: Config = { ...defaults, ...runtime, agents: { ...defaults.agents, ...runtime.agents }, agent: values.agent ?? runtime.agent ?? defaults.agent };
   validateConfig(config);

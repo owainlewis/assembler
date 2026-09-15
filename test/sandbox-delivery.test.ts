@@ -7,7 +7,7 @@ import { requireReady } from '../examples/gvisor/delivery.js';
 import { containerArgs, Sandbox } from '../examples/gvisor/sandbox.js';
 import workflow from '../examples/sandbox-delivery.js';
 import { defaults } from '../src/index.js';
-import type { Feedback } from '../src/github.js';
+import type { Feedback } from '../examples/lib/github.js';
 import { prepareGitHubToken } from '../examples/gvisor/credentials.js';
 
 test('GitHub login sharing is explicit and the temporary token is private and removable', async () => {

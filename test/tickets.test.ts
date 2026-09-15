@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fetchTicket, shellCommand, linearIssue, fetchResultSchema } from "../src/tickets.js";
+import { fetchTicket, shellCommand, linearIssue, fetchResultSchema } from "../examples/lib/tickets.js";
 import { z } from "../src/index.js";
 import { readCommandDecision } from "../src/agents.js";
 

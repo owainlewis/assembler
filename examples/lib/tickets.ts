@@ -1,4 +1,4 @@
-import { z, type Context } from "./index.js";
+import { z, type Context } from "../../src/index.js";
 import { commandSchema } from "./engineering.js";
 
 export const taskSchema = z.object({
