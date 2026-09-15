@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { fetchTicket, shellCommand, linearIssue, fetchResultSchema } from "../examples/lib/tickets.js";
 import { z } from "../src/index.js";
 import { readCommandDecision } from "../src/agents.js";
@@ -25,7 +26,7 @@ test("GitHub task is fetched by a named CLI agent and saved before delivery", as
   const ticket = await fetchTicket(ctx, "123", "owner/repo");
   assert.equal(requests[0].name, "Fetch task");
   assert.equal(requests[0].readOnly, true);
-  assert.deepEqual(requests[0].readCommands, ["gh issue view 123 --repo owner/repo --json number,title,body,url,state,comments"]);
+  assert.deepEqual(requests[0].readCommands, ["gh issue view 123 --repo owner/repo --json 'number,title,body,url,state,comments'"]);
   assert.match(requests[0].prompt, /CLI ONLY/);
   assert.match(ticket.body, /Original description/);
   assert.match(ticket.body, /Original comment/);
@@ -72,3 +73,17 @@ test("CLI quoting is literal and Claude's hook rejects extra shell operations", 
   assert.equal(shellCommand(["tool", "$(touch bad)"]), "tool '$(touch bad)'");
   assert.equal(shellCommand(["tool", "a'b"]), "tool 'a'\\''b'");
 });
+
+test("CLI quoting protects braces and commas while preserving ordinary arguments", () => {
+  assert.equal(shellCommand(["gh", "issue", "view", "{id,title}"]), "gh issue view '{id,title}'");
+  assert.equal(shellCommand(["tool", "{a,b}", "{1..3}", "number,title", "ENG-123", "--repo=owner/repo"]),
+    "tool '{a,b}' '{1..3}' 'number,title' ENG-123 --repo=owner/repo");
+});
+
+for (const args of [["{a,b}"], ["{1..3}"], ["plain", "ENG-123", "--repo=owner/repo", "number,title"]]) {
+  test(`CLI arguments survive Bash without expansion: ${JSON.stringify(args)}`, () => {
+    const command = shellCommand([process.execPath, "-e", "console.log(JSON.stringify(process.argv.slice(1)))", ...args]);
+    const stdout = execFileSync("bash", ["--noprofile", "--norc", "-c", command], { encoding: "utf8" });
+    assert.deepEqual(JSON.parse(stdout), args);
+  });
+}
