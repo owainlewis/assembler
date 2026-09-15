@@ -29,7 +29,7 @@ export function linearIssue(reference: string): string | undefined {
     : /^https:\/\/linear\.app\/[^/]+\/issue\/([A-Z][A-Z0-9]*-\d+)(?:\/[^?#]*)?$/i.exec(reference)?.[1].toUpperCase();
 }
 export function shellCommand(command: string[]): string {
-  return command.map(arg => /^[a-zA-Z0-9_./:@,={}-]+$/.test(arg) ? arg : "'" + arg.replaceAll("'", "'\\''") + "'").join(" ");
+  return command.map(arg => /^[a-zA-Z0-9_./:@=-]+$/.test(arg) ? arg : "'" + arg.replaceAll("'", "'\\''") + "'").join(" ");
 }
 
 export async function fetchTicket(ctx: Context, reference: string, repo: string, linearCommands?: string[][]): Promise<Ticket> {
